@@ -1,0 +1,40 @@
+# A pushed tag vX.Y.Z (or vX.Y.Z-betaN) builds the zip and uploads it to
+# GitHub Releases, CurseForge and Wago. tools/release.py makes the tag.
+# Secrets (repo Settings > Secrets and variables > Actions):
+#   CF_API_KEY      CurseForge API token
+#   WAGO_API_TOKEN  Wago Addons API token
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      CF_API_TOKEN: ${{ secrets.CF_API_KEY }}
+      WAGO_API_TOKEN: ${{ secrets.WAGO_API_TOKEN }}
+      GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The version is typed once, in the .toc (versioning.md). A tag that
+      # does not match it stops here, before anything is uploaded.
+      - name: Check the tag matches the .toc version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          tag="${tag%%-*}"
+          toc="$(sed -n 's/^## Version: *//p' HUDini.toc | tr -d '\r')"
+          if [ "$tag" != "$toc" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match '## Version: $toc' in HUDini.toc"
+            exit 1
+          fi
+
+      - uses: BigWigsMods/packager@v2

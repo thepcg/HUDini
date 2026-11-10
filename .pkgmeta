@@ -1,0 +1,15 @@
+package-as: HUDini
+
+manual-changelog:
+  filename: CHANGELOG.md
+  markup-type: markdown
+
+ignore:
+  - branding
+  - decisions
+  - docs
+  - framework
+  - tickets
+  - tools
+  - CONTRIBUTING.md
+  - README.md

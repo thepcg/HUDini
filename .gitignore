@@ -1,0 +1,15 @@
+# Packaged builds
+*.zip
+*.tar.gz
+
+# Editor and OS cruft
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+

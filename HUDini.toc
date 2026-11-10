@@ -1,0 +1,47 @@
+## Interface: 16001
+## Title: HUDini
+## Notes: A heads-up display for every character: your action bars in keybind order, with your bars and your target's right above them. It hides when nothing needs you.
+## Author: Edag
+## Version: 0.29.0
+## SavedVariables: HUDiniDB
+## IconTexture: Interface\AddOns\HUDini\Media\icon
+## AddonCompartmentFunc: HUDini_OnAddonCompartmentClick
+## AddonCompartmentFuncOnEnter: HUDini_OnAddonCompartmentEnter
+## AddonCompartmentFuncOnLeave: HUDini_OnAddonCompartmentLeave
+## Category-enUS: Unit Frames
+## X-Curse-Project-ID: 1785956
+## X-Wago-ID: rN4ryvKD
+
+Util.lua
+Locales\enUS.lua
+Core.lua
+Modules.lua
+Classes.lua
+Classes\Hunter.lua
+Classes\Rogue.lua
+Classes\Warrior.lua
+Classes\Mage.lua
+Classes\Druid.lua
+Classes\Paladin.lua
+Classes\Priest.lua
+Classes\Shaman.lua
+Classes\Warlock.lua
+Bars.lua
+XP.lua
+Alerts.lua
+Auras.lua
+Totems.lua
+TargetDebuffs.lua
+Clicks.lua
+Feed.lua
+FeedLoot.lua
+FeedGains.lua
+FeedWatch.lua
+Styles.lua
+TestMode.lua
+Mover.lua
+ErrorVoice.lua
+About.lua
+Setup.lua
+MinimapButton.lua
+Options.lua

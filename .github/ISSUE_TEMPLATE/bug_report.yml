@@ -1,0 +1,86 @@
+name: Bug report
+description: Something in HUDini is wrong, or you see a Lua error.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the report. Each field below helps us find the problem faster.
+        HUDini is for the WoW Forever client. On another client, say so under "What happened".
+  - type: input
+    id: version
+    attributes:
+      label: HUDini version
+      description: Type /hud version in chat.
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: input
+    id: character
+    attributes:
+      label: Class and level
+      placeholder: "Mage, level 24"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you saw, and what you expected to see.
+      placeholder: |
+        1. I targeted an enemy and started a fight.
+        2. The HUD did not show.
+        I expected the HUD to show in the fight.
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: Lua error
+      description: |
+        Copy every error that names HUDini, with the stack.
+        With BugSack: open it and copy each HUDini error. No BugSack? Copy the text from the game's own error window.
+        No error? Leave this empty.
+      render: text
+  - type: dropdown
+    id: combat
+    attributes:
+      label: In a fight?
+      options:
+        - "Yes, in a fight"
+        - "No, out of combat"
+        - "I do not know"
+    validations:
+      required: true
+  - type: dropdown
+    id: rowmode
+    attributes:
+      label: Icon layout
+      description: In Options > AddOns > HUDini > Icons.
+      options:
+        - "Rows: Action Bars 1-3"
+        - "Packed: selected bars"
+        - "I do not know"
+  - type: input
+    id: addons
+    attributes:
+      label: Other UI addons
+      description: Addons that change the action bars or frames.
+      placeholder: "ElvUI, Bartender4"
+  - type: textarea
+    id: why
+    attributes:
+      label: /hud why
+      description: If the HUD shows or hides at the wrong time, type /hud why and copy the chat line here.
+      render: text
+  - type: textarea
+    id: api
+    attributes:
+      label: /hud debug api
+      description: Only if a feature does not work at all. Type /hud debug api and copy the chat lines here.
+      render: text
+  - type: textarea
+    id: more
+    attributes:
+      label: Anything else
+      description: A screenshot, or when it started.

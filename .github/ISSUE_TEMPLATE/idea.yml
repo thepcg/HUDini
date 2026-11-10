@@ -1,0 +1,27 @@
+name: Idea
+description: Ask for a change or a new feature.
+labels: [idea]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        HUDini does one thing: a small HUD at the center of the screen that hides when nothing needs you.
+        These are not planned for 1.0: Retail support, party or raid frames, a full UI replacement.
+        Ideas for play with fewer hints belong in the sister addon Unguided.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you want to do
+      description: Tell us what you try to do in the game, and what stops you today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Your idea
+      description: How HUDini could help. A rough idea is fine.
+  - type: input
+    id: character
+    attributes:
+      label: Class
+      description: If the idea is for one class, which class?
