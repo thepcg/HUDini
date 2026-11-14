@@ -111,7 +111,7 @@ One option, **Guide's flair** (Options > HUDini, under Advanced), and the first 
 - "Watch the HUD below: it changes size as you click, so you can judge it by eye. Take your time. I once spent a week choosing a hat."
 - "Should it ever seem to have a mind of its own, simply ask it: type /hud why. It answers in one short line, a skill I never quite learned."
 
-- **The same at every level:** labels, headers, buttons, setting lines, errors, alerts on the HUD, the feed, debug, and the first sentence of a tooltip. They have one text. No level names a person, company or product; Khadgar and Edag are the only names.
-- **Which lines may have flair:** the rows of "Where a touch may go" that allow one: chat answers, `/hud why` and `/hud help` lines, a tooltip's second sentence, setup body lines, the About window's body lines, README and store page (one text: the docs are in Khadgar's voice where they say so).
+- **The same at every level:** labels, headers, buttons, setting lines, errors, alerts on the HUD, the feed and debug. They have one text. No level names a person, company or product; Khadgar and Edag are the only names.
+- **Which lines may have flair:** the rows of "Where a touch may go" that allow one: chat answers, `/hud why` and `/hud help` lines, tooltips (each level words the same facts its own way, and the aside comes last), setup body lines, the About window's body lines, README and store page (one text: the docs are in Khadgar's voice where they say so).
 - **Plain first, at every level.** Each line still works with the flair taken out, and the meaning comes first in the line.
-- **A missing level uses the level below it**. A line that is the same at a level has no text of its own there. The texts of every level are in `Locales/enUS.lua`.
+- **A missing level uses the level below it**: a key with no text at a level shows the text of the level below. The texts of every level are in `Locales/enUS.lua`.

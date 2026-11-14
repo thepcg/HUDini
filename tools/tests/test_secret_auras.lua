@@ -147,7 +147,7 @@ H.test("a secret duration of a buff from the grid teaches nothing", function()
 	ns.HUDini.spells = { { spellID = 1459 } }
 	w.auras["Arcane Intellect"] = { auraInstanceID = 7, duration = 1800 }
 	ns.UpdateBuffMissing()
-	H.eq(Learned(ns)["Arcane Intellect"], true, "plain: learned")
+	H.eq(Learned(ns)["Arcane Intellect"], 1800, "plain: learned, with its length")
 	ns.ClassDB().buffSpells = {}
 	w.auras["Arcane Intellect"] = { auraInstanceID = 7, duration = w:Hidden() }
 	ns.UpdateBuffMissing()
@@ -161,7 +161,7 @@ H.test("a secret name, spell ID or duration of your own buff teaches nothing", f
 		ns.ClassDB().buffSpells = {}
 		w.index["HELPFUL|PLAYER"] = { aura }
 		ns.UpdateBuffMissing()
-		return Learned(ns)["Moon Ward"] == true
+		return Learned(ns)["Moon Ward"] ~= nil
 	end
 	H.eq(LearnsFrom({ name = "Moon Ward", spellId = 1470, duration = 1800 }), true, "plain: learned")
 	w.secret["Moon Ward"] = true

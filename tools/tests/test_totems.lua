@@ -262,20 +262,184 @@ H.test("no duration object from the game, or a plain length of 0", function()
 	H.eq(f.seen.cleared, true, "length 0: the time is cleared")
 end)
 
-H.test("no icon keeps the last one; an icon that throws still shows the totem", function()
+H.test("no icon, or one the texture refuses: no spot, not a black square", function()
+	-- TICK-0143: a spot with no icon showed only its black backdrop.
 	local w, ns = World()
 	Watch(ns)
 	local f = SpotOf(ns, 2)
-	local calls = 0
-	rawset(f.icon, "SetTexture", function(_, tex) calls = calls + 1; f.seen.icon = tex end)
-	Drop(w, 2)
-	H.eq(calls, 1, "an icon: set")
-	w.totems[2].icon = nil
-	w:fire("PLAYER_TOTEM_UPDATE", 2)
-	H.eq(calls, 1, "no icon: not set")
+	for _, icon in ipairs({ false, 0, "" }) do
+		Drop(w, 2)
+		H.eq(f:IsShown(), true, "a totem: shown")
+		w.totems[2].icon = icon or nil
+		w:fire("PLAYER_TOTEM_UPDATE", 2)
+		H.eq(f:IsShown(), false, "icon " .. tostring(icon) .. ": hidden")
+		H.eq(f.seen.cleared, true, "icon " .. tostring(icon) .. ": its time cleared")
+	end
 	rawset(f.icon, "SetTexture", function() error("bad texture") end)
-	H.ok(pcall(Drop, w, 2), "no throw")
-	H.eq(f:IsShown(), true, "the totem shows")
+	H.ok(pcall(Drop, w, 2), "a texture that throws: no throw")
+	H.eq(f:IsShown(), false, "a texture that throws: hidden")
+	rawset(f.icon, "SetTexture", function() return false end)
+	Drop(w, 2)
+	H.eq(f:IsShown(), false, "a texture that says false: hidden")
+	rawset(f.icon, "SetTexture", function() return true end)
+	Drop(w, 2)
+	H.eq(f:IsShown(), true, "a texture that takes it: shown")
+end)
+
+H.test("a secret icon goes to the texture as it is, and the totem shows", function()
+	local w, ns = World()
+	Watch(ns)
+	local f = SpotOf(ns, 1)
+	-- A table stands for the secret: no type or size test can pass it
+	-- unless the guard lets a secret through untested.
+	local icon = {}
+	w.secret[icon] = true
+	Drop(w, 1)
+	w.totems[1].icon = icon
+	w:fire("PLAYER_TOTEM_UPDATE", 1)
+	H.eq(f.seen.icon, icon, "the secret icon, unchanged")
+	H.eq(f:IsShown(), true, "shown")
+end)
+
+H.test("an empty slot the game calls have: no spot (TICK-0143)", function()
+	-- DK's level 7 shaman: an empty black square at the earth spot, with
+	-- no totem down. Each shape of "have, but empty" must show nothing.
+	local w, ns = World()
+	Watch(ns)
+	local f = SpotOf(ns, 2)
+	w.totems[2] = { have = true, start = 0, duration = 0, icon = nil }
+	w:fire("PLAYER_TOTEM_UPDATE", 2)
+	H.eq(f:IsShown(), false, "have, length 0, no icon: hidden")
+	w.totems[2] = { have = true, start = 0, duration = 0, icon = 0 }
+	w:fire("PLAYER_TOTEM_UPDATE", 2)
+	H.eq(f:IsShown(), false, "have, length 0, icon 0: hidden")
+	w.totems[2] = { have = true, start = 0, duration = 0, icon = 1002 }
+	w:fire("PLAYER_TOTEM_UPDATE", 2)
+	H.eq(f:IsShown(), false, "have and an icon, but length 0 and no object: hidden")
+	w.totems[2] = { have = true, start = 100, duration = 120, icon = 1002 }
+	w.durations[2] = { IsZero = function() return true end }
+	w:fire("PLAYER_TOTEM_UPDATE", 2)
+	H.eq(f:IsShown(), false, "a duration object that is zero: hidden")
+	w.durations[2] = { IsZero = function() return false end }
+	w:fire("PLAYER_TOTEM_UPDATE", 2)
+	H.eq(f:IsShown(), true, "a duration object that is not zero: shown")
+end)
+
+H.test("a secret length or duration object never hides a totem", function()
+	local w, ns = World()
+	Watch(ns)
+	local f = SpotOf(ns, 3)
+	local asked = 0
+	local object = { IsZero = function() asked = asked + 1; return true end }
+	w.totems[3] = { have = true, start = 100, duration = 120, icon = 1003 }
+	w.durations[3] = object
+	w.secret[object] = true
+	w:fire("PLAYER_TOTEM_UPDATE", 3)
+	H.eq(f:IsShown(), true, "a secret object: shown")
+	H.eq(asked, 0, "a secret object: never asked")
+	-- The answer that WOULD hide it, plain, then secret. A plain truthy
+	-- "have" (1) keeps the secret on the IsZero answer alone.
+	w.secret[object] = nil
+	w.totems[3].have = 1
+	w.durations[3] = { IsZero = function() return true end }
+	w:fire("PLAYER_TOTEM_UPDATE", 3)
+	H.eq(f:IsShown(), false, "IsZero answers a plain true: hidden")
+	w.secret[true] = true
+	w:fire("PLAYER_TOTEM_UPDATE", 3)
+	H.eq(f:IsShown(), true, "IsZero answers a secret true: shown")
+	w.secret[true] = nil
+	w.durations[3] = { IsZero = function() error("restricted") end }
+	w:fire("PLAYER_TOTEM_UPDATE", 3)
+	H.eq(f:IsShown(), true, "IsZero throws: shown")
+end)
+
+H.test("a secret length with no duration object: shown, never compared", function()
+	-- A stub cannot make a number throw on a compare (harness.lua), so the
+	-- secret length is a table that type() calls a number: a compare
+	-- before the secret guard throws, as it does in the game.
+	local w, ns = World()
+	Watch(ns)
+	local f = SpotOf(ns, 3)
+	local length = {}
+	local rawtype = w.env.type
+	w.env.type = function(v)
+		if rawequal(v, length) then return "number" end
+		return rawtype(v)
+	end
+	w.env.GetTotemDuration = nil
+	w.totems[3] = { have = true, start = 100, duration = 0, icon = 1003 }
+	w:fire("PLAYER_TOTEM_UPDATE", 3)
+	H.eq(f:IsShown(), false, "a plain length of 0: hidden")
+	w.totems[3].duration = length
+	w.secret[length] = true
+	H.ok(pcall(w.fire, w, "PLAYER_TOTEM_UPDATE", 3), "no throw")
+	H.eq(f:IsShown(), true, "a secret length: shown")
+	H.eq(f.seen.cooldown, nil, "a secret length: no plain time")
+end)
+
+H.test("a secret have with a plain empty sign: no spot", function()
+	-- Only a plain answer hides a spot; here the plain one is "empty".
+	local w, ns = World()
+	Watch(ns)
+	local f = SpotOf(ns, 1)
+	w.secret[true] = true
+	w.totems[1] = { have = true, start = 0, duration = 0, icon = 1001 }
+	w:fire("PLAYER_TOTEM_UPDATE", 1)
+	H.eq(f:IsShown(), false, "no object, length 0: hidden")
+	H.eq(f.seen.fromBoolean, nil, "not left to the game's alpha")
+end)
+
+H.test("a secret answer from SetTexture: the totem shows", function()
+	-- The false that would hide it, plain, then secret.
+	local w, ns = World()
+	Watch(ns)
+	local f = SpotOf(ns, 4)
+	rawset(f.icon, "SetTexture", function() return false end)
+	Drop(w, 4)
+	H.eq(f:IsShown(), false, "a plain false: hidden")
+	w.secret[false] = true
+	Drop(w, 4)
+	H.eq(f:IsShown(), true, "a secret false: shown")
+end)
+
+H.test("an update asks the game for a totem's time once", function()
+	local w, ns = World()
+	Watch(ns)
+	local asked = {}
+	local real = w.env.GetTotemDuration
+	w.env.GetTotemDuration = function(slot)
+		asked[slot] = (asked[slot] or 0) + 1
+		return real(slot)
+	end
+	Drop(w, 2)
+	H.eq(asked[2], 1, "the slot with a totem: asked once")
+	H.eq(asked[1], nil, "a plain empty slot: not asked")
+	H.eq(SpotOf(ns, 2).seen.object, w.durations[2], "the object reaches the Cooldown")
+end)
+
+H.test("the spots are children of the body, so they hide with the HUD", function()
+	-- TICK-0143: they were children of the anchor, which never hides, so
+	-- the row stayed on screen while the HUD was hidden.
+	local w, ns = World()
+	local body = ns.HUDini.body
+	local function Visible(f)
+		while f do
+			if not f:IsShown() then return false end
+			f = f:GetParent()
+		end
+		return true
+	end
+	Drop(w, 2)
+	local f = SpotOf(ns, 2)
+	for i = 1, 4 do
+		H.eq(ns.TotemSpot(i):GetParent(), body, "spot " .. i .. ": a child of the body")
+	end
+	body:Show()
+	H.eq(Visible(f), true, "the HUD shows: the totem shows")
+	body:Hide()
+	H.eq(Visible(f), false, "the HUD hides: the totem hides")
+	body:Show()
+	H.eq(Visible(f), true, "the HUD is back: the totem is back")
 end)
 
 H.test("a throw shows nothing and throws nothing", function()

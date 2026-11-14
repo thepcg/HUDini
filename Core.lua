@@ -409,10 +409,26 @@ end
 
 ns.BarEnabled = BarEnabled
 
+-- A macro slot's macro number, from the name on the button. nil when the
+-- name is secret or no macro has it. Two macros with one name give the first.
+local function MacroIndex(slot)
+	local name = GetActionText and GetActionText(slot)
+	if IsSecret(name) or type(name) ~= "string" or name == "" then return nil end
+	local index = GetMacroIndexByName and GetMacroIndexByName(name)
+	if IsSecret(index) or type(index) ~= "number" or index < 1 then return nil end
+	return index
+end
+
 -- Returns "spell", spellID or "item", itemID. nil when the slot holds nothing
 -- we can draw. A macro counts as whatever it casts or uses.
+--
+-- The 12.x client reads a macro slot as "macro", id, subType. With the
+-- subType "spell", id is the spell the macro casts, not the macro's number
+-- (the game's own button compares it with a spell ID). With any other
+-- subType the id is not the macro's number either, so the number comes from
+-- the button's name. With no subType (an older client) id is the number.
 local function SlotAction(slot)
-	local actionType, id = GetActionInfo(slot)
+	local actionType, id, subType = GetActionInfo(slot)
 	if not actionType or not id then return nil end
 
 	if actionType == "spell" then
@@ -420,9 +436,16 @@ local function SlotAction(slot)
 	elseif actionType == "item" then
 		return "item", id
 	elseif actionType == "macro" then
-		local spellID = GetMacroSpell(id)
+		if subType == "spell" then
+			if id > 0 then return "spell", id end
+			return nil
+		end
+		local index = id
+		if subType ~= nil then index = MacroIndex(slot) end
+		if not index then return nil end
+		local spellID = GetMacroSpell(index)
 		if spellID then return "spell", spellID end
-		local _, link = GetMacroItem(id)
+		local _, link = GetMacroItem(index)
 		local itemID = link and tonumber(link:match("item:(%d+)"))
 		if itemID then return "item", itemID end
 	end

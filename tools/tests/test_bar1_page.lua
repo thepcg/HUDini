@@ -154,6 +154,8 @@ end)
 -- The Cat Form bar has Shred on button 1, nothing on button 2, Rake on 3.
 local function Druid(o)
 	local ns, w, t = World(o)
+	-- A fight's start checks your buffs (TICK-0144), which reads spell names.
+	w.env.C_Spell.GetSpellName = w.env.C_Spell.GetSpellName or function() end
 	t.bars[1], t.bars[2], t.bars[3] = { "spell", 1 }, { "spell", 2 }, { "spell", 3 }
 	t.bars[61] = { "spell", 61 }
 	t.bars[73], t.bars[75] = { "spell", 73 }, { "spell", 75 }

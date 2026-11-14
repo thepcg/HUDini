@@ -120,6 +120,23 @@ local SLOTS = {
 	INVTYPE_RANGED = { 16 }, INVTYPE_RANGEDRIGHT = { 16 },
 }
 
+-- A main hand that leaves no off hand (D-036, TICK-0149): a two-hand
+-- weapon, or a bow, gun or crossbow (weapon subclass 2, 3, 18). A wand (19)
+-- leaves it free. Bags.lua BothHands uses the same rule.
+local RANGED_2H = { [2] = true, [3] = true, [18] = true }
+local WEAPON_CLASS = 2 -- Enum.ItemClass.Weapon
+
+local function BothHands(link)
+	local equipLoc, _, _, classID, subClassID = select(9, Info(link))
+	if equipLoc == "INVTYPE_2HWEAPON" then return true end
+	return classID == WEAPON_CLASS and RANGED_2H[subClassID] == true
+end
+
+-- What a one-hand weapon in the off hand takes the place of. A shield or a
+-- held-in-off-hand item is not a weapon: a one-hand weapon is not compared
+-- with it (TICK-0149).
+local OFF_HAND_WEAPON = { INVTYPE_WEAPON = true, INVTYPE_WEAPONOFFHAND = true }
+
 -- Armour slots that take one armour type: cloth, leather, mail or plate.
 local ARMOR_SLOTS = {
 	INVTYPE_HEAD = true, INVTYPE_SHOULDER = true, INVTYPE_CHEST = true, INVTYPE_ROBE = true,
@@ -171,13 +188,19 @@ local function Wearable(link)
 	return true
 end
 
--- How many item levels better than what you wear, or nil. Only for gear you
--- can wear now, and armour of the type you wear in that slot or a heavier
--- one: leather is no upgrade to a shaman in mail.
+-- How many item levels better than what you wear, or nil. Only for gear your
+-- class can ever wear (the class table in Bags.lua, D-037, TICK-0153: no
+-- mail chest for a mage, even with no red tooltip line), gear you can wear
+-- now, and armour of the type you wear in that slot or a heavier one:
+-- leather is no upgrade to a shaman in mail.
 local function Upgrade(link)
-	local _, _, _, _, minLevel, _, _, _, equipLoc = Info(link)
+	local _, _, _, _, minLevel, _, _, _, equipLoc, _, _, classID, subClassID = Info(link)
 	local slots = equipLoc and SLOTS[equipLoc]
 	if not slots then return end
+	-- No Bags (a game started before Bags.lua was in the .toc, then a
+	-- /reload): the hint keeps its old rules rather than throw.
+	local Bags = ns.Bags
+	if Bags and Bags.ClassCanWear and not Bags.ClassCanWear(equipLoc, classID, subClassID) then return end
 	local myLevel = Plain(UnitLevel("player"))
 	if minLevel and myLevel and minLevel > myLevel then return end
 	if not Wearable(link) then return end
@@ -189,13 +212,17 @@ local function Upgrade(link)
 	if not ilvl then return end
 
 	local mainHand = GetInventoryItemLink("player", 16)
-	local twoHanded = mainHand and select(9, Info(mainHand)) == "INVTYPE_2HWEAPON"
+	local twoHanded = mainHand and BothHands(mainHand) or false
 	local worst
 	for _, slot in ipairs(slots) do
 		local fits = true
 		if slot == 17 then
 			if twoHanded then fits = false end
-			if equipLoc == "INVTYPE_WEAPON" and not (CanDualWield and CanDualWield()) then fits = false end
+			if equipLoc == "INVTYPE_WEAPON" then
+				local offHand = GetInventoryItemLink("player", 17)
+				if not (CanDualWield and CanDualWield()) then fits = false end
+				if offHand and not OFF_HAND_WEAPON[select(9, Info(offHand)) or ""] then fits = false end
+			end
 		end
 		if fits then
 			local have = GetInventoryItemLink("player", slot)

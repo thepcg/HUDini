@@ -9,14 +9,23 @@
 	earth, fire, water, air. Each spot keeps its place, so a totem is always
 	where you last saw it. A spot shows while its slot has a totem, with the
 	totem's icon and a Cooldown that counts its time down. It goes when the
-	totem ends or you recall it. The row is part of the HUD: it hides when
-	the HUD hides, and takes its scale.
+	totem ends or you recall it. The row is part of the HUD: its spots are
+	children of HUDini.body, so they hide and fade when the HUD does
+	(TICK-0143), and take its scale. They are placed against the blue box.
+
+	A slot has a totem only on a plain sign that one is down (TICK-0143):
+	the game says so, its duration object is not zero (an empty slot gives
+	none), or, with no object, its plain length is above 0. And it needs an
+	icon the texture takes. A slot the game calls "have" with no time or no
+	icon showed as an empty black square; now it shows nothing.
 
 	Secret values (environment.md): in a fight a totem slot can be secret.
 	Its time left goes to the Cooldown as the game's duration object, as it
 	is. A secret "a totem is down" sets the spot's alpha through
-	SetAlphaFromBoolean. HUDini never compares or tests a secret value; only
-	a plain answer shows or hides a spot.
+	SetAlphaFromBoolean. A secret length, icon or duration object counts as
+	"maybe down": it never hides a spot, and the "have" decides. HUDini never
+	compares or tests a secret value; only a plain answer shows or hides a
+	spot.
 
 	The spots take no clicks: a right-click on the game's own totem bar
 	recalls a totem, and that bar is the game's.
@@ -65,7 +74,8 @@ end
 local function Spot(i)
 	local f = spots[i]
 	if f then return f end
-	f = M:CreateFrame("Frame", nil, HUDini)
+	-- The body, not the anchor: only the body hides when idle (Core.lua).
+	f = M:CreateFrame("Frame", nil, HUDini.body)
 	f:EnableMouse(false)
 
 	f.backdrop = f:CreateTexture(nil, "BACKGROUND")
@@ -105,12 +115,46 @@ local function Clear(f)
 	f:Hide()
 end
 
+-- The slot's duration object, or nil: none, a throw, or no such API.
+local function Object(slot)
+	local ok, object = Ask(_G.GetTotemDuration, slot)
+	if ok then return object end
+end
+
+-- A sign that a totem is down. A duration object: down unless it says,
+-- plainly, that it is zero; a secret one, or one that cannot say, counts
+-- as down. No object: down when the plain length is above 0, or when the
+-- length is secret. "Down" here only lets a spot show: the "have" and the
+-- icon must agree.
+local function Down(object, duration)
+	if object ~= nil then
+		if IsSecret(object) then return true end
+		local ok, zero = pcall(function() return object:IsZero() end)
+		return not (ok and Plain(zero) == true)
+	end
+	if IsSecret(duration) then return true end
+	return type(duration) == "number" and duration > 0
+end
+
+-- Set the icon. False when there is none to set (nil, 0 or "", as an empty
+-- slot gives), or the texture does not take it: a spot with no icon is an
+-- empty black square. A secret icon goes to the texture as it is.
+local function Icon(f, icon)
+	if not IsSecret(icon) then
+		local kind = type(icon)
+		if not ((kind == "number" and icon > 0) or (kind == "string" and icon ~= "")) then
+			return false
+		end
+	end
+	local ok, set = pcall(f.icon.SetTexture, f.icon, icon)
+	return ok and Plain(set) ~= false
+end
+
 -- The time left. The duration object goes to the Cooldown as it is, secret
 -- or not. Without one, the plain start and length do, when the game gave them.
-local function Time(f, slot, start, duration)
+local function Time(f, object, start, duration)
 	local cd = f.cd
-	local ok, object = Ask(_G.GetTotemDuration, slot)
-	if ok and object ~= nil
+	if object ~= nil
 		and pcall(cd.SetCooldownFromDurationObject, cd, object) then
 		return
 	end
@@ -127,9 +171,11 @@ local function Paint(f, slot)
 	local secret = ok and IsSecret(have)
 	-- A throw, or a plain "no totem": the spot goes.
 	if not ok or (not secret and not have) then return Clear(f) end
+	-- A plain sign the slot is empty, or no icon to show: the spot goes.
+	local object = Object(slot)
+	if not Down(object, duration) or not Icon(f, icon) then return Clear(f) end
 
-	if icon ~= nil then pcall(f.icon.SetTexture, f.icon, icon) end
-	Time(f, slot, start, duration)
+	Time(f, object, start, duration)
 	if secret then
 		-- The game shows or hides it. 255 and 0 are safe under either alpha
 		-- scale (Alerts.lua). Where it cannot, the spot stays hidden.

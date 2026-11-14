@@ -230,7 +230,16 @@ local function Grid(w)
 		end
 	end
 	ns.HUDini.spells[1] = { spellID = SOR }
-	ns.HUDini.icons[1] = { buff = buff }
+	-- The charges text (TICK-0148) is made on the icon at first use.
+	local icon = { buff = buff }
+	function icon:CreateFontString()
+		local text = {}
+		function text:SetPoint() end
+		function text:SetJustifyH() end
+		function text:SetText(v) self.text = v end
+		return text
+	end
+	ns.HUDini.icons[1] = icon
 	return buff
 end
 

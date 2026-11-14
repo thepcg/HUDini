@@ -31,7 +31,7 @@ local function Paladin()
 	local ns = w:loadAddon()
 	ns.HUDini.spells = {}
 	for id in pairs(NAMES) do ns.HUDini.spells[#ns.HUDini.spells + 1] = { spellID = id, row = 0, col = id } end
-	return ns, on
+	return ns, on, w
 end
 
 -- Use each buff once, so all four are learned, then put on only the ones given.
@@ -60,6 +60,11 @@ end)
 H.test("a paladin with no aura, or no blessing, misses one", function()
 	local ns, on = Paladin()
 	H.eq((After(ns, on, 4)), true, "no aura")
-	ns, on = Paladin()
-	H.eq((After(ns, on, 2)), true, "no blessing")
+	local w
+	ns, on, w = Paladin()
+	H.eq((After(ns, on, 2)), false, "no blessing, out of a fight: a 5-minute buff (D-033)")
+	-- Seen off before the fight, so off in it.
+	w.combat = true
+	ns.UpdateBuffMissing()
+	H.eq(ns.buffMissing, true, "no blessing, in a fight")
 end)

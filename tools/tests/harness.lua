@@ -731,6 +731,8 @@ local function Stubs(w)
 	s.GetBindingKey = NoOp
 	s.GetMacroSpell = NoOp
 	s.GetMacroItem = NoOp
+	s.GetActionText = NoOp
+	s.GetMacroIndexByName = NoOp
 	s.IsPlayerSpell = function() return false end
 	s.SpellHasRange = function() return false end
 	s.C_ActionBar = {}

@@ -78,7 +78,8 @@ is true:
 - a tracked buff is off (5 minutes or more, or with no end, like a paladin
   aura). HUDini learns these per class the first time it sees the
   buff on you, from a spell on the HUD or any timed buff you cast on
-  yourself (on a bar it does not read, or on no bar). `/hud buffs` lists them
+  yourself (on a bar it does not read, or on no bar). `/hud buffs` lists them.
+  One under 30 minutes, like Lightning Shield, counts only in a fight
 - a weapon you hold has no weapon buff, once you know one (like a Shaman's
   Rockbiter Weapon). A shield, or anything with "Fishing" in its name, needs
   none
@@ -178,6 +179,7 @@ addon, here is where to look.
 | `XP.lua` | the XP bar and XP per hour |
 | `Alerts.lua` | interrupt outline, an icon when a combat buff is off, dispel tint, purgeable buffs, bait, a red icon when a tracked buff is off, a friendly target missing a tracked buff |
 | `Auras.lua` | buff time on icons, tracked buffs, weapon buffs and bait by tooltip |
+| `Bags.lua` | a green +N on bag gear above what you wear; off by default, adds its hooks only once turned on |
 | `Clicks.lua` | click the health bars to target, right-click for the unit menu |
 | `Feed.lua` | the feed box: fading lines, the highlight, the session totals |
 | `FeedLoot.lua` | feed lines from chat: loot, currency, crafts, reputation, skills |

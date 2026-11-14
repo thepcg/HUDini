@@ -15,6 +15,10 @@ local NO_ROW = {
 	minimapAngle = true,    -- the minimap button's place: a drag saves it
 }
 
+-- Settings whose row a later branch adds. The test fails once the row is
+-- there, so the line goes with the row.
+local ROW_PENDING = {}
+
 -- Saved values a proxy row writes for them.
 local PROXY = { growRight = "growToward", growDown = "growToward", auraMap = "auraMap" }
 
@@ -154,6 +158,8 @@ H.test("every saved setting has a row, or is a saved value with no row", functio
 					H.ok(NO_ROW[key][k] or (w.vars["HUDini_" .. k] and w.vars["HUDini_" .. k].tbl == w.env.HUDiniDB[key]),
 						class .. ": " .. key .. "." .. k .. " has a row")
 				end
+			elseif ROW_PENDING[key] then
+				H.ok(not w.vars["HUDini_" .. key], class .. ": " .. key .. " has its row now: take it out of ROW_PENDING")
 			elseif not NO_ROW[key] then
 				local name = "HUDini_" .. (PROXY[key] or key)
 				H.ok(w.vars[name], class .. ": " .. key .. " has a row")

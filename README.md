@@ -35,7 +35,7 @@ Health bars can also serve as unit controls: **left-click to target that unit, r
 
 ### A timely reminder
 
-HUDini can remind you when a learned long-duration buff is missing, when a friendly player you target could use one of your buffs outside combat, or when your equipped fishing pole has no bait.
+HUDini can remind you when a learned long-duration buff is missing (one under 30 minutes, only in combat), when a friendly player you target could use one of your buffs outside combat, or when your equipped fishing pole has no bait.
 
 Classes with the appropriate abilities can also receive:
 
@@ -58,7 +58,7 @@ Message timers can pause during combat, giving you time to read afterward. New m
 
 ### Room to breathe
 
-Keep the original game displays you like. Hide the ones HUDini replaces. You can also make bag buttons, menu buttons, and the minimap appear only on hover, or temporarily move and resize supported game windows.
+Keep the original game displays you like. Hide the ones HUDini replaces. You can also make bag buttons, menu buttons, and the minimap appear only on hover, or temporarily move and resize supported game windows. In your bags, a green +N can mark gear your class can wear now when its item level beats what you wear in that slot, and a gold + when its stat changes add up to a gain.
 
 These conveniences are **off until you choose them**. HUDini does not hide the game's action bars for you.
 
@@ -139,7 +139,7 @@ Open settings with `/hud` or through **Options > AddOns > HUDini**. Common choic
 | **Alerts** | Class ability alerts and other reminders. |
 | **Your class** | Abilities used for interrupts, dispels, enemy-buff removal, and combat-buff reminders; the resource to track; and learned buffs. Choices are shared by characters of that class. |
 | **Feed** | Event types, larger announcements, optional hints, appearance, message timing, and filters. |
-| **Game frames** | Original displays, hover behavior, movable windows, and muting cooldown and range voice lines. |
+| **Game frames** | Original displays, hover behavior, bag upgrade numbers, movable windows, muting cooldown and range voice lines, and the date and time on chat lines. |
 
 A grayed-out setting needs another choice enabled, a different layout, or a suitable class ability. Its tooltip explains the requirement. The page's **Defaults** button restores that page's settings.
 

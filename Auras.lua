@@ -134,6 +134,43 @@ local function ClearTime(f)
 	f.buff:Hide()
 end
 
+-- A buff's charges (its stack count, the game's "applications") on its
+-- icon, bottom right, where the game puts a stack count (TICK-0148). The
+-- game makes the text: GetAuraApplicationDisplayCount gives "" under the
+-- minimum. Minimum 1: the last charge shows, and a buff with no charges (0)
+-- shows nothing. A restricted aura gives a secret string; SetText takes it
+-- as it is, and nothing here compares or joins it. An item's icon keeps
+-- that spot for the item count (Core.lua UpdateCounts), so it gets none.
+local function ChargesText(f)
+	if not f.charges then
+		f.charges = f:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
+		f.charges:SetPoint("BOTTOMRIGHT", -1, 2)
+		f.charges:SetJustifyH("RIGHT")
+	end
+	return f.charges
+end
+
+local function ClearCharges(f)
+	if f.charges then f.charges:SetText("") end
+end
+
+-- A client without the call: the count, only when it reads plain. A read
+-- that fails leaves the last text, as ShowTime leaves the last time.
+local function ShowCharges(f, instanceID, data)
+	local text
+	local get = C_UnitAuras.GetAuraApplicationDisplayCount
+	if type(get) == "function" then
+		local ok, count = pcall(get, "player", instanceID, 1)
+		if not ok then return end
+		text = count
+	else
+		local ok, count = pcall(function() return data.applications end)
+		count = ok and Plain(count) or nil
+		text = (type(count) == "number" and count >= 1) and tostring(count) or ""
+	end
+	pcall(ChargesText(f).SetText, ChargesText(f), text)
+end
+
 function ns.UpdateIconAuras()
 	local db = HUDiniDB
 	if not db then return end
@@ -145,15 +182,17 @@ function ns.UpdateIconAuras()
 		local f = HUDini.icons[i]
 		local e = HUDini.spells[i]
 		if f and e and f.buff then
+			if e.itemID then ClearCharges(f) end
 			if not db.showBuffTime then
 				ClearTime(f)
+				ClearCharges(f)
 			else
 				-- First name that answers wins. One that cannot tell leaves the
 				-- icon alone, rather than wiping a timer that is still right.
-				local found, unknown = nil, false
+				local found, foundData, unknown = nil, nil, false
 				for _, name in ipairs(AuraNames(e)) do
-					local id = FindAura(name)
-					if id then found = id break end
+					local id, data = FindAura(name)
+					if id then found, foundData = id, data break end
 					if id == nil then unknown = true end
 				end
 
@@ -161,8 +200,10 @@ function ns.UpdateIconAuras()
 				-- instance ID and only move its end time.
 				if found then
 					ShowTime(f, found)
+					if not e.itemID then ShowCharges(f, found, foundData) end
 				elseif not unknown then
 					ClearTime(f)
+					ClearCharges(f)
 				end
 			end
 		end
@@ -190,6 +231,15 @@ end
 -- ns.missingBuffID (the first one, grid order, then by name) is the icon
 -- Alerts.lua puts by your health bar.
 --
+-- The saved value is the buff's full length in seconds, as the aura's
+-- duration last read it (0: no end). A buff under 30 minutes (Lightning
+-- Shield) is one you keep up for a fight, so it counts as missing only in
+-- a fight (D-033, TICK-0144): out of one it gives no icon and does not show
+-- the HUD. An entry saved before TICK-0144 is true, with no length: it
+-- counts in and out of a fight, as it did, until HUDini next reads the buff
+-- on you and saves its length. A length is saved only when it reads plain;
+-- a secret one leaves the saved value as it was.
+--
 -- A fight can hide your auras. Then HUDini goes by what it last saw: a buff
 -- that was on stays on until its end time, and a buff you cast counts as on,
 -- until the end its length last read gives (TICK-0135).
@@ -216,6 +266,14 @@ end
 --------------------------------------------------------------------------------
 
 local LONG_BUFF = 300   -- seconds
+local SHORT_BUFF = 1800 -- seconds: under this, missing only in a fight
+
+-- True when a learned buff that is off counts as missing now. length is the
+-- saved value: a plain number from Learn, or true from before TICK-0144.
+local function CountsNow(length, fight)
+	if type(length) == "number" and length > 0 and length < SHORT_BUFF then return fight end
+	return true
+end
 
 -- Tracking spells by name, for a client whose minimap list cannot be read.
 -- Each is a set of the enUS names and the client's own (Classes.lua,
@@ -386,10 +444,10 @@ local function Learn(source, data, spellID)
 	if ONE_JOB()[source] or IsTracking(source) or IsState(source, spellID) then return end
 	local ok, duration = pcall(function() return data.duration end)
 	duration = ok and Plain(duration) or nil
-	if duration and (duration == 0 or duration >= LONG_BUFF) then
+	if type(duration) == "number" and (duration == 0 or duration >= LONG_BUFF) then
 		local mine = ns.ClassDB()
 		mine.buffSpells = mine.buffSpells or {}
-		mine.buffSpells[source] = true
+		mine.buffSpells[source] = duration
 	end
 end
 
@@ -498,6 +556,7 @@ function ns.UpdateBuffMissing()
 	local missingID
 	if HUDiniDB and C_UnitAuras and C_UnitAuras.GetAuraDataBySpellName then
 		local learned = ns.ClassDB().buffSpells or {}
+		local fight = ns.InCombat()
 		DropNotToKeep(learned)
 		local checked = {}
 		for _, e in ipairs(HUDini.spells) do
@@ -508,7 +567,10 @@ function ns.UpdateBuffMissing()
 				-- the name).
 				if learned[source] and IsState(source, e.spellID) then learned[source] = nil end
 				local on = BuffState(source, AuraNames(e), e.spellID)
-				if learned[source] and on == false and not missingID then missingID = e.spellID end
+				if learned[source] and on == false and not missingID
+						and CountsNow(learned[source], fight) then
+					missingID = e.spellID
+				end
 			end
 		end
 
@@ -521,7 +583,8 @@ function ns.UpdateBuffMissing()
 		for _, source in ipairs(rest) do
 			local id = ns.SpellID(source)
 			if id and IsPlayerSpell and IsPlayerSpell(id)
-					and BuffState(source, AuraNamesFor(source)) == false and not missingID then
+					and BuffState(source, AuraNamesFor(source)) == false and not missingID
+					and CountsNow(learned[source], fight) then
 				missingID = id
 			end
 		end
@@ -975,6 +1038,16 @@ events:SetScript("OnEvent", function(self, event, unit, _, spellID)
 		if HUDiniDB then OnCast(spellID) end
 		return
 	end
+	if event == "PLAYER_REGEN_DISABLED" then
+		-- A short buff counts as missing only in a fight (D-033): check now.
+		-- The lockdown starts just after this event, so check again a frame
+		-- later. The end of a fight checks below.
+		if HUDiniDB then
+			Call(ns.UpdateBuffMissing)
+			C_Timer.After(0, function() Call(ns.UpdateBuffMissing) end)
+		end
+		return
+	end
 	if event == "SPELLS_CHANGED" then
 		-- A new tracking spell joins the minimap's list: read it again.
 		minimapTracking = nil
@@ -984,6 +1057,7 @@ events:SetScript("OnEvent", function(self, event, unit, _, spellID)
 		pcall(self.RegisterUnitEvent, self, "UNIT_AURA", "player", "target")
 		pcall(self.RegisterUnitEvent, self, "UNIT_SPELLCAST_SUCCEEDED", "player")
 		pcall(self.RegisterEvent, self, "PLAYER_REGEN_ENABLED")
+		pcall(self.RegisterEvent, self, "PLAYER_REGEN_DISABLED")
 		pcall(self.RegisterEvent, self, "SPELLS_CHANGED")
 		-- Fired after a restriction ends, so your auras read again (TICK-0125).
 		-- Also fired before one starts; it is not enforced until the event

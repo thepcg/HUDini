@@ -431,6 +431,12 @@ local function UpdateOwnBuffIcon()
 	end
 	ownBuffIcon:SetShown(spellID ~= nil)
 	SlotLeft(bar)
+	-- The HUD icon of that spell glows while this shows (D-035, TICK-0150),
+	-- with the proc glow setting off too. ns.missingBuffID is the grid
+	-- entry's own spell ID when the spell is on the grid (Auras.lua
+	-- UpdateBuffMissing), so the glow finds its icon by that ID. A spell off
+	-- the grid has no icon: nothing glows.
+	if ns.HUDini and ns.HUDini.SetAlertGlow then ns.HUDini:SetAlertGlow("ownBuff", spellID) end
 end
 
 ns.UpdateOwnBuffIcon = UpdateOwnBuffIcon

@@ -4,13 +4,26 @@
 -- lighter than the type you wear in that slot gets no hint.
 
 -- Item ID -> name, armour subclass (1 cloth .. 4 plate, nil for a weapon),
--- the slot kind and the item level.
+-- the slot kind, the item level, and a weapon's subclass (2 bow, 3 gun,
+-- 19 wand; 1 when not given).
 local ITEMS = {
 	[101] = { "Flimsy Chain Vest", 3, "INVTYPE_CHEST", 10 },
 	[102] = { "Rugged Leather Vest", 2, "INVTYPE_CHEST", 10 },
 	[103] = { "Linen Shirt Vest", 1, "INVTYPE_CHEST", 10 },
 	[104] = { "Worn Leather Vest", 2, "INVTYPE_CHEST", 5 },     -- worn now
 	[105] = { "Heavy Axe", nil, "INVTYPE_2HWEAPON", 10 },
+	[106] = { "Iron Mace", nil, "INVTYPE_WEAPON", 30 },
+	[107] = { "Oak Shield", nil, "INVTYPE_SHIELD", 20 },
+	[108] = { "Bronze Mace", nil, "INVTYPE_WEAPON", 25 },
+	[109] = { "Short Bow", nil, "INVTYPE_RANGED", 30, 2 },
+	[110] = { "Worn Buckler", nil, "INVTYPE_SHIELD", 15 },
+	[111] = { "Tin Dagger", nil, "INVTYPE_WEAPON", 20 },
+	[112] = { "Old Gun", nil, "INVTYPE_RANGEDRIGHT", 30, 3 },
+	[113] = { "Ash Wand", nil, "INVTYPE_RANGEDRIGHT", 30, 19 },
+	[114] = { "Parrying Dagger", nil, "INVTYPE_WEAPONOFFHAND", 20 },
+	[115] = { "Apprentice Staff", nil, "INVTYPE_2HWEAPON", 30, 10 },
+	[116] = { "Kite Shield", 6, "INVTYPE_SHIELD", 30 },       -- armour, subclass 6 shield
+	[117] = { "Bulky Plate Vest", 4, "INVTYPE_CHEST", 10 },
 }
 local function Link(id) return ("|cffffffff|Hitem:%d::::::::|h[%s]|h|r"):format(id, ITEMS[id][1]) end
 local function IdOf(link) return tonumber(tostring(link):match("item:(%d+)")) end
@@ -33,14 +46,16 @@ local function UpgradeWorld(level)
 		local id = type(item) == "number" and item or IdOf(item)
 		local it = id and ITEMS[id]
 		if not it then return end
-		return it[1], Link(id), 2, it[4], 1, "", "", 1, it[3], 134, 0, it[2] and 4 or 2, it[2] or 1
+		return it[1], Link(id), 2, it[4], 1, "", "", 1, it[3], 134, 0, it[2] and 4 or 2, it[2] or it[5] or 1
 	end
 	C_Item.GetItemIconByID = function() return 134 end
 	C_Item.GetDetailedItemLevelInfo = function(link)
 		local id = IdOf(link)
 		return id and ITEMS[id] and ITEMS[id][4]
 	end
-	w.env.GetInventoryItemLink = function(_, slot) if slot == 5 then return Link(104) end end
+	w.worn = { [5] = 104 }
+	w.env.GetInventoryItemLink = function(_, slot) local id = w.worn[slot]; return id and Link(id) end
+	w.env.CanDualWield = function() return w.dual == true end
 	w.env.C_TooltipInfo = { GetHyperlink = function(link)
 		local id = IdOf(link)
 		local color = w.color or (w.cannot[id] and RED or WHITE)
@@ -130,4 +145,93 @@ H.test("a secret tooltip color: no hint, no error", function()
 		w.secret[hidden[ch]] = nil
 	end
 	H.eq(Hint(Loot(w, 102)), "5", "the same color, plain: the hint shows")
+end)
+
+-- TICK-0149: a one-hand weapon is compared with the off hand only when the
+-- off hand is empty or holds a weapon; a bow, gun or crossbow in the main
+-- hand leaves no off hand.
+
+H.test("a shield in the off hand: a one-hand weapon is compared with the main hand only", function()
+	local w = UpgradeWorld(40)
+	w.dual = true
+	w.worn[16], w.worn[17] = 106, 107                    -- a mace at 30, a shield at 20
+	H.eq(Hint(Loot(w, 108)), nil, "a mace at 25: below the main hand, so no hint")
+	w.worn[17] = 111                                     -- a dagger at 20 in the off hand
+	H.eq(Hint(Loot(w, 108)), "5", "a weapon in the off hand: the lower one counts")
+	w.worn[17] = nil
+	H.eq(Hint(Loot(w, 108)), "25", "an empty off hand counts as 0")
+end)
+
+H.test("a bow or gun in the main hand leaves no off hand to compare with", function()
+	for _, ranged in ipairs({ 109, 112 }) do
+		local w = UpgradeWorld(40)
+		w.worn[16] = ranged
+		H.eq(Hint(Loot(w, 110)), nil, ITEMS[ranged][1] .. ": a shield is not compared with an empty off hand")
+	end
+end)
+
+H.test("a two-hand weapon in the main hand leaves no off hand to compare with", function()
+	local w = UpgradeWorld(40)
+	w.dual = true
+	w.worn[16] = 105                                     -- a two-hand axe at 10
+	H.eq(Hint(Loot(w, 110)), nil, "a shield: no hint")
+	H.eq(Hint(Loot(w, 108)), "15", "a mace at 25: compared with the axe only, not the empty off hand")
+end)
+
+H.test("an off-hand weapon in the off hand counts as a weapon to compare with", function()
+	local w = UpgradeWorld(40)
+	w.dual = true
+	w.worn[16], w.worn[17] = 106, 114                    -- a mace at 30, an off-hand dagger at 20
+	H.eq(Hint(Loot(w, 108)), "5", "a mace at 25: the lower of the two counts")
+end)
+
+H.test("a wand in the main hand leaves the off hand free (D-036)", function()
+	local w = UpgradeWorld(40)
+	w.worn[16] = 113
+	H.eq(Hint(Loot(w, 110)), "15", "a shield beside a wand: better than the empty off hand")
+end)
+
+-- TICK-0153 (D-037): the feed uses the bags' class table, so a class never
+-- gets the hint on gear it can never wear, even when the tooltip has no red
+-- line (DK: "do not light up a mail chest piece for a mage").
+
+H.test("a mage gets no hint on mail, plate, a shield or an axe; cloth and a staff, yes", function()
+	local w = UpgradeWorld(40)
+	w.class, w.className = "MAGE", "Mage"
+	w.worn[5] = nil                                      -- an empty chest
+	H.eq(Hint(Loot(w, 101)), nil, "mail, with no red line in the tooltip")
+	H.eq(Hint(Loot(w, 117)), nil, "plate")
+	H.eq(Hint(Loot(w, 116)), nil, "a shield")
+	H.eq(Hint(Loot(w, 105)), nil, "a two-hand axe")
+	H.eq(Hint(Loot(w, 103)), "10", "cloth")
+	H.eq(Hint(Loot(w, 115)), "30", "a staff")
+end)
+
+H.test("a warrior gets the hint on plate, mail, a shield and a staff", function()
+	local w = UpgradeWorld(40)
+	w.class, w.className = "WARRIOR", "Warrior"
+	H.eq(Hint(Loot(w, 117)), "5", "plate over leather")
+	H.eq(Hint(Loot(w, 101)), "5", "mail over leather")
+	H.eq(Hint(Loot(w, 116)), "30", "a shield, off hand empty")
+	H.eq(Hint(Loot(w, 115)), "30", "a staff, hands empty")
+	H.eq(Hint(Loot(w, 113)), nil, "a wand: no wand for a warrior")
+end)
+
+H.test("a class the game will not name: no hint", function()
+	local w = UpgradeWorld(40)
+	w.class, w.className = nil, nil
+	H.eq(Hint(Loot(w, 102)), nil)
+end)
+
+-- A game started before Bags.lua was in the .toc and then reloaded has no
+-- ns.Bags: the hint keeps its old rules (the red tooltip line) and throws
+-- nothing.
+H.test("no bag module loaded: the old hint rules, no error", function()
+	local w = UpgradeWorld(40)
+	w.class, w.className = "MAGE", "Mage"
+	w.worn[5] = nil
+	w.ns.Bags = nil
+	H.eq(Hint(Loot(w, 101)), "10", "mail, no red line: the class table is not there to stop it")
+	w.cannot[117] = true
+	H.eq(Hint(Loot(w, 117)), nil, "plate painted red: the tooltip still stops it")
 end)

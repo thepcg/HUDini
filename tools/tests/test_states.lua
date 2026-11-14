@@ -123,7 +123,7 @@ H.test("a paladin aura on the stance bar has no form ID: it is learned and can b
 	w.form, w.formID = 5, nil
 	w.auras["Devotion Aura"] = 0
 	ns.UpdateBuffMissing()
-	H.eq(Learned(ns)["Devotion Aura"], true, "learned")
+	H.eq(Learned(ns)["Devotion Aura"], 0, "learned, with no end")
 	w.auras["Devotion Aura"] = nil
 	w.form = nil
 	ns.UpdateBuffMissing()
@@ -136,7 +136,7 @@ H.test("a secret form ID is not a form, and throws nothing", function()
 	w.form, w.formID = 5, "SECRET"
 	w.auras["Devotion Aura"] = 0
 	ns.UpdateBuffMissing()
-	H.eq(Learned(ns)["Devotion Aura"], true, "still learned")
+	H.eq(Learned(ns)["Devotion Aura"], 0, "still learned")
 end)
 
 -- Spell 60 names the form you are in: the value that would make
@@ -154,7 +154,7 @@ H.test("a secret form spell is not a form, and throws nothing", function()
 	H.eq(Learned(ns)["Bärengestalt"], nil, "plain: the form you are in is never learned")
 	hide = true
 	ns.UpdateBuffMissing()
-	H.eq(Learned(ns)["Bärengestalt"], true, "secret: the form is not known, so it is learned")
+	H.eq(Learned(ns)["Bärengestalt"], 0, "secret: the form is not known, so it is learned")
 end)
 
 H.test("a mount on the grid is never learned", function()
@@ -166,7 +166,7 @@ H.test("a long timed buff is still learned with forms and mounts known", functio
 	local w, ns = World({ class = "MAGE", className = "Mage", grid = { 8 }, forms = true, mounts = {} })
 	w.auras["Arcane Intellect"] = 3600
 	ns.UpdateBuffMissing()
-	H.eq(Learned(ns)["Arcane Intellect"], true, "learned")
+	H.eq(Learned(ns)["Arcane Intellect"], 3600, "learned")
 end)
 
 H.test("a Hunter uses Feign Death (6 min) from the grid, then stands up: nothing is missing", function()

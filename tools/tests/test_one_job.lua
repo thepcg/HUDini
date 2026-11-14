@@ -119,7 +119,7 @@ end
 H.test("Arcane Intellect, cast and ended, is still learned and missing", function()
 	local w, ns = World("Arcane Intellect")
 	local learned, missing = CastAndEnd(w, ns, "Arcane Intellect", 3600)
-	H.eq(learned, true, "Arcane Intellect learned")
+	H.eq(learned, 3600, "Arcane Intellect learned, with its length")
 	H.eq(missing, true, "Arcane Intellect missing after it ends")
 end)
 

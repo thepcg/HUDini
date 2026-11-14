@@ -6,7 +6,7 @@ What changed in each version of HUDini, for players. The format follows
 features, and a new patch version fixes them. `/hud version` tells you
 which version you have.
 
-## [Unreleased]
+## [0.30.0] - 2026-11-14
 
 The first public release. HUDini puts your action bars, in keybind order,
 your health, power and cast, and your target's bars in one block at the
@@ -24,8 +24,9 @@ highlights.
 - Class alerts for all nine classes: an outline on an enemy cast you can
   interrupt, a tint for a debuff on you that you can dispel, your target's
   buffs you can purge, and a mark when a combat buff is off. A learned buff
-  that runs out shows its icon by your health bar, and a friend you target
-  who lacks one shows it by theirs. Fishing without bait says "No bait."
+  that runs out shows its icon by your health bar (one under 30 minutes
+  only in a fight), and a friend you target who lacks one shows it by
+  theirs. Fishing without bait says "No bait."
 - The feed: one line for each thing you get, such as loot, money, a
   finished quest, a new level, a new spell or mount, or a flight path. It
   waits out a fight, then fades. Pick what shows on the Feed page.
@@ -90,3 +91,12 @@ highlights.
   page: your character no longer says that a spell or item is still
   recharging, or that the target is too far away. The error sound and the
   red error text stay. Off at the start.
+- Upgrade numbers in your bags, under Your bags on the Game frames page: a
+  green +N on gear your class can wear now whose item level is N above what
+  you wear in that slot, and a gold + at the bottom left when the stat changes
+  the game lists for it add up to a gain. Off at the start.
+- Date and time in chat, under Chat windows on the Game frames page: each
+  new line in your chat windows starts with the server date and time, in
+  place of the game's own timestamp. Date and time format picks one of
+  three: 26-11-14@09:25:04, [09:25], or 11/14/26 [09:25]. The combat log
+  gets none. Off at the start.

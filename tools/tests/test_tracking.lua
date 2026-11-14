@@ -78,7 +78,7 @@ H.test("a tracking buff on the grid is never learned; a paladin aura is", functi
 	})
 	ns.UpdateBuffMissing()
 	local learned = Learned(ns)
-	H.eq(learned["Devotion Aura"], true, "the paladin aura is learned")
+	H.eq(learned["Devotion Aura"], 0, "the paladin aura is learned")
 	H.eq(learned["Sense Undead"], nil, "Sense Undead")
 	H.eq(learned["Track Beasts"], nil, "Track Beasts")
 end)
@@ -90,7 +90,7 @@ H.test("a timed tracking buff is never learned; a long timed buff is", function(
 	})
 	ns.UpdateBuffMissing()
 	local learned = Learned(ns)
-	H.eq(learned["Arcane Intellect"], true, "Arcane Intellect is learned")
+	H.eq(learned["Arcane Intellect"], 1800, "Arcane Intellect is learned")
 	H.eq(learned["Track Beasts"], nil, "Track Beasts")
 end)
 
@@ -120,7 +120,7 @@ H.test("the minimap's tracking list counts, in the client's own language", funct
 		if name == "Devotion Aura" then return { auraInstanceID = 8, duration = 0, expirationTime = 0 } end
 	end
 	ns.UpdateBuffMissing()
-	H.eq(Learned(ns)["Devotion Aura"], true, "an \"other\" entry is not tracking")
+	H.eq(Learned(ns)["Devotion Aura"], 0, "an \"other\" entry is not tracking")
 end)
 
 H.test("a tracking buff learned before is dropped at login; the rest stay", function()

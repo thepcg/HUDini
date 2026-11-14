@@ -113,7 +113,7 @@ H.test("a one-job buff with a German name is not learned; a buff to keep up is",
 	ns.UpdateBuffMissing()
 	local learned = ns.ClassDB().buffSpells or {}
 	H.eq(learned["Unendlicher Atem"], nil, "Unending Breath is for one job")
-	H.eq(learned["Arkane Intelligenz"], true, "Arcane Intellect is learned")
+	H.eq(learned["Arkane Intelligenz"], 3600, "Arcane Intellect is learned")
 end)
 
 H.test("a German paladin's blessing on the target counts as theirs: no target buff icon", function()

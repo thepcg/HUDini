@@ -103,3 +103,267 @@ end
 
 function M:OnEnable() SetMuted(true) end
 function M:OnDisable() SetMuted(false) end
+
+--[[--------------------------------------------------------------------------
+	Chat date and time stamps (TICK-0154, D-038; shapes TICK-0155, D-039)
+
+	Opt-in, off at the start. With it on, each new line in the game's chat
+	windows starts with the realm date and time, in one of three shapes
+	(setting chatStampShape), all 24-hour, two digits each:
+	  long (the default)  "26-11-14@09:25:04 | "
+	  short               "[09:25] "
+	  dated               "11/14/26 [09:25] "   (month/day/year)
+	It sits in this file so a /reload deploys it (no new .toc file); it is a
+	module of its own.
+
+	How (wow-ui-source, forever 1.60.1.70938): a chat window's AddMessage
+	puts the line in its history (ChatFrameMixin:AddMessage, Shared/
+	ChatFrame.lua:35). HUDini hooks AddMessage after the fact
+	(hooksecurefunc: the game's code runs on untainted) and then rewrites
+	that newest line through TransformMessages, which the game gives addons
+	for this: it is a secure elevation barrier (ScrollingMessageFrame.lua:
+	797-824). HUDini never sets a game global or a game setting.
+	- A secret line is left as it is: HUDini never joins or compares it.
+	- The game's own Chat Timestamps (Settings "showTimestamps") put their
+	  stamp first on player chat; HUDini takes that stamp off the line it
+	  stamps, so a line shows one stamp. A secret line keeps the game's.
+	- Realm time: GetServerTime() is UTC, with seconds; the calendar
+	  (C_DateAndTime.GetCurrentCalendarTime) gives the realm's date, hour and
+	  minute. Their difference, to the nearest 15 minutes, is the realm's
+	  time zone. No calendar from the game: no stamp, never the PC clock.
+	- Not the combat log window (COMBATLOG): it has its own timestamp
+	  option, and its lines come fast.
+	- The feed is no chat window, so it gets no stamp.
+	- A line the game copies into a whisper window or a popped-out tab keeps
+	  its own stamp, or its lack of one; a line that has HUDini's stamp at
+	  the start, in any of the three shapes, never gets a second.
+	- Lines from before the setting went on keep no stamp; lines stamped
+	  stay stamped when it goes off. A hook cannot be taken out, so off
+	  makes it do nothing.
+----------------------------------------------------------------------------]]
+
+local CS = ns.NewModule("chatStamps", {
+	label    = "Chat date and time stamps", -- locale: skip a debug name (/hud debug modules)
+	setting  = "chatStamps",
+	defaults = { chatStamps = false, chatStampShape = "long" },
+})
+
+local floor = math.floor
+
+-- Days since 1970-01-01 for a date, and back (H. Hinnant's civil
+-- algorithms): plain sums, so no PC time zone gets in.
+local function DaysFromCivil(y, m, d)
+	if m <= 2 then y = y - 1 end
+	local era = floor(y / 400)
+	local yoe = y - era * 400
+	local doy = floor((153 * ((m + 9) % 12) + 2) / 5) + d - 1
+	local doe = yoe * 365 + floor(yoe / 4) - floor(yoe / 100) + doy
+	return era * 146097 + doe - 719468
+end
+
+local function CivilFromDays(z)
+	z = z + 719468
+	local era = floor(z / 146097)
+	local doe = z - era * 146097
+	local yoe = floor((doe - floor(doe / 1460) + floor(doe / 36524) - floor(doe / 146096)) / 365)
+	local doy = doe - (365 * yoe + floor(yoe / 4) - floor(yoe / 100))
+	local mp = floor((5 * doy + 2) / 153)
+	local d = doy - floor((153 * mp + 2) / 5) + 1
+	local m = mp < 10 and mp + 3 or mp - 9
+	local y = yoe + era * 400
+	if m <= 2 then y = y + 1 end
+	return y, m, d
+end
+
+-- The realm's time zone: realm time minus UTC, in seconds. Read again each
+-- minute, so a change of summer time follows.
+local zone, zoneAt
+
+local function ReadZone(now)
+	local C = _G.C_DateAndTime
+	local ok, t = pcall(function() return C.GetCurrentCalendarTime() end)
+	if not ok or type(t) ~= "table" or ns.IsSecret(t) then return nil end
+	local y, m, d = ns.Plain(t.year), ns.Plain(t.month), ns.Plain(t.monthDay)
+	local h, mi = ns.Plain(t.hour), ns.Plain(t.minute)
+	local parts = { y, m, d, h, mi }
+	for i = 1, 5 do
+		if type(parts[i]) ~= "number" then return nil end
+	end
+	-- A calendar that is not ready yet (at login: month 0, day 0) gives no
+	-- zone, not a wrong date for a minute.
+	if m < 1 or m > 12 or d < 1 or d > 31 or h < 0 or h > 23 or mi < 0 or mi > 59 then return nil end
+	local realm = DaysFromCivil(y, m, d) * 86400 + h * 3600 + mi * 60
+	local z = floor((realm - now + 450) / 900) * 900
+	if z < -14 * 3600 or z > 14 * 3600 then return nil end -- no time zone is that far
+	return z
+end
+
+-- Realm time now, in seconds since 1970 as if the realm were UTC; nil when
+-- the game does not say.
+local function RealmNow()
+	local get = _G.GetServerTime
+	local now = get and ns.Plain(get())
+	if type(now) ~= "number" then return nil end
+	if not zone or now - zoneAt >= 60 or now < zoneAt then
+		local z = ReadZone(now)
+		if z then zone, zoneAt = z, now end
+	end
+	return zone and now + zone
+end
+
+-- The three shapes (D-039): how to write one for a date and time, and a
+-- Lua pattern for a line that starts with one. In game text "|" starts a
+-- code; "||" shows one "|", so the long shape is stored with "||".
+local SHAPES = {
+	long = {
+		make = function(y, m, d, h, mi, s) return ("%02d-%02d-%02d@%02d:%02d:%02d || "):format(y, m, d, h, mi, s) end,
+		find = "^%d%d%-%d%d%-%d%d@%d%d:%d%d:%d%d || ",
+	},
+	short = {
+		make = function(_, _, _, h, mi) return ("[%02d:%02d] "):format(h, mi) end,
+		find = "^%[%d%d:%d%d%] ",
+	},
+	dated = {
+		make = function(y, m, d, h, mi) return ("%02d/%02d/%02d [%02d:%02d] "):format(m, d, y, h, mi) end,
+		find = "^%d%d/%d%d/%d%d %[%d%d:%d%d%] ",
+	},
+}
+
+-- The stamp for t (seconds as RealmNow gives them) in a shape; an unknown
+-- shape is the long one.
+local function Stamp(t, shape)
+	local y, m, d = CivilFromDays(floor(t / 86400))
+	local s = t % 86400
+	return (SHAPES[shape] or SHAPES.long).make(y % 100, m, d, floor(s / 3600), floor(s % 3600 / 60), s % 60)
+end
+
+-- True when the line starts with a HUDini stamp, in any shape: whatever
+-- the shape was when it was stamped, it gets no second.
+local function HasOurStamp(text)
+	for _, shape in pairs(SHAPES) do
+		if text:find(shape.find) then return true end
+	end
+	return false
+end
+CS.Stamp, CS.RealmNow = Stamp, RealmNow -- for the test harness
+
+-- A Lua pattern for the start of a line that the game's own timestamp
+-- format makes, or nil (that option off, or a code HUDini does not know).
+local CODES = {
+	H = "%d%d?", I = "%d%d?", M = "%d%d", S = "%d%d", p = "[%a%.]+",
+	y = "%d%d", Y = "%d%d%d%d", m = "%d%d?", d = "%d%d?",
+}
+local patternFor, pattern
+
+local function Pattern(fmt)
+	local out, i = { "^" }, 1
+	while i <= #fmt do
+		local c = fmt:sub(i, i)
+		if c == "%" then
+			local p = CODES[fmt:sub(i + 1, i + 1)]
+			if not p then return nil end
+			out[#out + 1] = p
+			i = i + 2
+		else
+			out[#out + 1] = c:find("%W") and "%" .. c or c
+			i = i + 1
+		end
+	end
+	return table.concat(out)
+end
+
+local function GameStampPattern()
+	local U = _G.ChatFrameUtil
+	local ok, fmt = pcall(function() return U.GetTimestampFormat() end)
+	fmt = ok and ns.Plain(fmt)
+	if type(fmt) ~= "string" or fmt == "" then return nil end
+	if fmt ~= patternFor then patternFor, pattern = fmt, Pattern(fmt) end
+	return pattern
+end
+CS.GameStampPattern = GameStampPattern -- for the test harness
+
+-- Windows the game is filling with copies of old lines. When it opens a
+-- whisper window or pops a chat tab out, it clears the window and then
+-- calls AddMessage for each old line it copies (FloatingChatFrame.lua:
+-- 919-936, ChatFrameUtil.lua:740-795). A copy is not a new line: it keeps
+-- its stamp, or its lack of one. The flag ends when that game function
+-- returns, or at the next screen frame at the latest.
+local copying = {}
+
+local function OnClear(frame)
+	copying[frame] = true
+	local T = _G.C_Timer
+	if T and T.After then T.After(0, function() copying[frame] = nil end) end
+end
+
+local function CopiesDone()
+	for frame in pairs(copying) do copying[frame] = nil end
+end
+
+-- After a chat window's AddMessage: stamp the line it just added.
+local function OnAddMessage(frame, message)
+	if not CS.enabled or ns.IsSecret(message) or type(message) ~= "string" then return end
+	if frame == _G.COMBATLOG or copying[frame] then return end
+	-- A line with HUDini's stamp is not stamped again. The game's own stamp
+	-- comes first: the game's options have no brackets, but a stamp format
+	-- set by hand (/console showTimestamps, another addon) can look like the
+	-- short shape. A line that starts with the game's stamp is a new line,
+	-- whose game stamp the transform takes off, so it still shows one stamp.
+	local game = GameStampPattern()
+	if not (game and message:find(game)) and HasOurStamp(message) then return end
+	-- The newest line's place in the history, so an older line with the same
+	-- text is left alone. A client that hides it: no stamp.
+	local ok, newest = pcall(function() return frame.historyBuffer:CalculateElementIndex(1) end)
+	if not ok or type(newest) ~= "number" then return end
+	local now = RealmNow()
+	if not now then return end
+	local stamp = Stamp(now, HUDiniDB.chatStampShape)
+	local seen, done = 0, false
+	frame:TransformMessages(function(text)
+		seen = seen + 1
+		if done or seen ~= newest then return false end
+		if ns.IsSecret(text) or text ~= message then return false end
+		done = true
+		return true
+	end, function(text, ...)
+		if game then text = text:gsub(game, "", 1) end
+		return stamp .. text, ...
+	end)
+end
+
+local hooked = {}
+
+local function Hook(frame)
+	if type(frame) ~= "table" or hooked[frame] then return end
+	if type(frame.AddMessage) ~= "function" or type(frame.TransformMessages) ~= "function" then return end
+	hooked[frame] = true
+	hooksecurefunc(frame, "AddMessage", OnAddMessage)
+	if type(frame.Clear) == "function" then hooksecurefunc(frame, "Clear", OnClear) end -- locale: skip a method name
+end
+
+-- Every chat window the game has made: the docked and floating ones, and
+-- the whisper windows it opens later (CHAT_FRAMES lists them all by name).
+local function HookAll()
+	local names = _G.CHAT_FRAMES
+	if type(names) == "table" then
+		for _, name in pairs(names) do Hook(_G[name]) end
+	end
+	for i = 1, tonumber(_G.NUM_CHAT_WINDOWS) or 10 do Hook(_G["ChatFrame" .. i]) end
+end
+
+local watching = false
+
+function CS:OnEnable()
+	HookAll()
+	if not watching and type(_G.FCF_OpenTemporaryWindow) == "function" then
+		watching = true
+		hooksecurefunc("FCF_OpenTemporaryWindow", function()
+			CopiesDone()
+			if CS.enabled then HookAll() end
+		end)
+		local U = _G.ChatFrameUtil
+		if type(U) == "table" and type(U.PopOutChat) == "function" then
+			hooksecurefunc(U, "PopOutChat", CopiesDone)
+		end
+	end
+end

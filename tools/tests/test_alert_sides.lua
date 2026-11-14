@@ -102,9 +102,15 @@ local function BarePole(w)
 	w:fire("PLAYER_EQUIPMENT_CHANGED", 16)
 end
 
+-- A fight's start and end check your buffs again (TICK-0144), so the
+-- check gives the answer the test sets.
 local function OwnBuffOff(ns, on)
-	ns.missingBuffID = on and AI or nil
-	ns.UpdateOwnBuffIcon()
+	ns.UpdateBuffMissing = function()
+		ns.missingBuffID = on and AI or nil
+		ns.buffMissing = on and true or false
+		ns.UpdateOwnBuffIcon()
+	end
+	ns.UpdateBuffMissing()
 end
 
 local function Fight(w, on)

@@ -21,6 +21,8 @@ local WHITE = { r = 1, g = 1, b = 1 }
 -- w.loot: the loot window's slots, { link, qty, currencyID }.
 local function World()
 	local w = H.world()
+	-- A class that can wear the axe (TICK-0153: the harness's mage cannot).
+	w.class, w.className = "WARRIOR", "Warrior"
 	w.secret, w.loot = {}, {}
 	for k, v in pairs({
 		LOOT_ITEM_SELF = "You receive loot: %s.",

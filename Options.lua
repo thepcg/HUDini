@@ -994,6 +994,11 @@ local function BuildBlizzard(category, layout)
 	Checkbox(category, "minimapMouseover", Text("opt.minimapMouseover"),
 		Text("opt.minimapMouseover.tip"))
 
+	-- Bag upgrade numbers (D-034, TICK-0145): the one growth of the bag part.
+	Header(layout, Text("opt.head.bags"))
+	Checkbox(category, "showBagUpgrades", Text("opt.showBagUpgrades"),
+		Text("opt.showBagUpgrades.tip"))
+
 	Header(layout, Text("opt.head.windows"))
 	Checkbox(category, "moveWindows", Text("opt.moveWindows"),
 		Text("opt.moveWindows.tip"))
@@ -1002,6 +1007,19 @@ local function BuildBlizzard(category, layout)
 	Header(layout, Text("opt.head.sounds"))
 	Checkbox(category, "muteErrorVoice", Text("opt.muteErrorVoice"),
 		Text("opt.muteErrorVoice.tip"))
+
+	-- Date and time on chat lines (D-038, TICK-0154).
+	Header(layout, Text("opt.head.chat"))
+	Checkbox(category, "chatStamps", Text("opt.chatStamps"),
+		Text("opt.chatStamps.tip"))
+	-- The stamp's shape (D-039, TICK-0155): each choice shows its example.
+	Under(Dropdown(category, "chatStampShape", Text("opt.chatStampShape"),
+		Text("opt.chatStampShape.tip"),
+		function() return {
+			{ "long", Text("opt.chatStampShape.long") },
+			{ "short", Text("opt.chatStampShape.short") },
+			{ "dated", Text("opt.chatStampShape.dated") },
+		} end), "chatStamps")
 end
 
 --------------------------------------------------------------------------------
