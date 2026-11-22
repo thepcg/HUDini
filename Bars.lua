@@ -2152,6 +2152,7 @@ function ns.SaveReport()
 	end
 
 	ns.ReportAura(out, out)
+	if ns.BuffWatchReport then ns.BuffWatchReport(out) end
 	ns.ReportBars(out)
 
 	HUDiniDB.lastReport   = lines

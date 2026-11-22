@@ -702,6 +702,35 @@ local function Profession(name)
 	end
 end
 
+-- A weapon skill's cap (TICK-0170, GitHub #15). The game's first: on the
+-- Forever client C_SkillInfo.GetNumSkillLines() and GetSkillLineInfo(index)
+-- give each line of the skills list as a table with name, isHeader and
+-- maxRank (Gethe/wow-ui-source forever, SkillInfoDocumentation.lua). Only
+-- the lines the list shows are read: a skill under a collapsed header is
+-- not seen. nil when the client gives no plain cap.
+local function GameSkillCap(name)
+	local S = C_SkillInfo
+	if not (S and S.GetNumSkillLines and S.GetSkillLineInfo) then return end
+	local okN, n = pcall(S.GetNumSkillLines)
+	n = okN and Plain(n) or nil
+	if type(n) ~= "number" then return end
+	for i = 1, n do
+		local ok, info = pcall(S.GetSkillLineInfo, i)
+		if ok and type(info) == "table" and Plain(info.name) == name
+			and Plain(info.isHeader) ~= true then
+			local max = Plain(info.maxRank)
+			if type(max) == "number" and max > 0 then return max end
+			return
+		end
+	end
+end
+
+-- Else DK's rule: 5 points per level.
+local function LevelSkillCap()
+	local level = Plain(UnitLevel("player"))
+	if type(level) == "number" and level > 0 then return level * 5 end
+end
+
 local function OnSkill(msg)
 	local text = Plain(msg)
 	if not text then
@@ -716,6 +745,8 @@ local function OnSkill(msg)
 		return
 	end
 	local icon, maxRank = Profession(name)
+	-- Not a profession: a weapon skill or Defense.
+	if not icon then maxRank = GameSkillCap(name) or LevelSkillCap() end
 	F.Line({
 		kind = "skill", key = "skill:" .. name, replace = true, amount = tonumber(rank),
 		name = name, maxRank = maxRank, icon = icon, color = C.skill,

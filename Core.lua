@@ -151,6 +151,7 @@ ns.defaults = {
 		tapped     = { 0.92, 0.92, 0.92 },  -- a mob someone else has tagged
 		interrupt  = { 1.00, 0.82, 0.00 },  -- target cast you can kick
 		shielded   = { 0.52, 0.52, 0.52 },  -- target cast you cannot
+		timer      = { 0.30, 0.60, 1.00 },  -- a cooldown timer bar (TimerBars.lua)
 	},
 
 	-- How much flair HUDini's words have (D-011, TICK-0055): 0 Light,
@@ -584,6 +585,23 @@ end
 local GLOW_TEXTURE = "Interface\\SpellActivationOverlay\\IconAlert"
 local GLOW_COORDS  = { 0.00781250, 0.50781250, 0.27734375, 0.52734375 }
 
+-- Buff time on an icon: a Cooldown with no swipe, only its numbers, bottom
+-- left, in green. The icon's own (f.buff) and the one the game draws in a
+-- fight (Auras.lua, TICK-0159) look the same.
+function ns.StyleBuffTime(cd)
+	cd:SetDrawSwipe(false)
+	cd:SetDrawEdge(false)
+	if cd.SetDrawBling then cd:SetDrawBling(false) end
+	cd:SetHideCountdownNumbers(false)
+	if cd.SetCountdownFont then pcall(cd.SetCountdownFont, cd, "NumberFontNormal") end
+	local text = cd.GetCountdownFontString and cd:GetCountdownFontString()
+	if text then
+		text:ClearAllPoints()
+		text:SetPoint("BOTTOMLEFT", 1, 2)
+		text:SetTextColor(0.45, 1, 0.45)
+	end
+end
+
 local function CreateIcon(parent, index)
 	local f = CreateFrame("CheckButton", "HUDiniIcon" .. index, parent)
 	-- Hover only: the tooltip shows, but clicks pass straight through, so an
@@ -663,18 +681,8 @@ local function CreateIcon(parent, index)
 	-- never fights the spell's cooldown: no swipe, just the numbers, bottom left.
 	f.buff = CreateFrame("Cooldown", nil, f, "CooldownFrameTemplate")
 	f.buff:SetAllPoints()
-	f.buff:SetDrawSwipe(false)
-	f.buff:SetDrawEdge(false)
-	if f.buff.SetDrawBling then f.buff:SetDrawBling(false) end
-	f.buff:SetHideCountdownNumbers(false)
+	ns.StyleBuffTime(f.buff)
 	f.buff:SetFrameLevel(f.cd:GetFrameLevel() + 2)
-	if f.buff.SetCountdownFont then pcall(f.buff.SetCountdownFont, f.buff, "NumberFontNormal") end
-	local buffText = f.buff.GetCountdownFontString and f.buff:GetCountdownFontString()
-	if buffText then
-		buffText:ClearAllPoints()
-		buffText:SetPoint("BOTTOMLEFT", 1, 2)
-		buffText:SetTextColor(0.45, 1, 0.45)
-	end
 	f.buff:Hide()
 
 	-- Stack count, for items like food and water.
@@ -1154,9 +1162,18 @@ function HUDini:ShouldShow()
 		return true, Text("why.noBait")
 	end
 
+	-- An item you make is not in your bags, and you can make it now
+	-- (Alerts.lua, TICK-0182): show, so its icon is seen. A reagent you
+	-- need for a spell never shows the HUD.
+	if ns.MissingItemWake and ns.MissingItemWake() then return true, Text("why.missingItem") end
+
 	-- Your race's ability can help now (Alerts.lua): show, so its lit icon
 	-- is seen (TICK-0099).
 	if self.alertGlow.racial then return true, Text("why.racial") end
+
+	-- A cooldown you watch just ended and a HUD icon shows it (Alerts.lua):
+	-- show for the few seconds that icon glows (TICK-0157).
+	if ns.ReadyGlowLit and ns.ReadyGlowLit() then return true, Text("why.cooldownReady") end
 
 	return false, Text("why.idle")
 end
@@ -2079,6 +2096,11 @@ events:SetScript("OnEvent", function(self, event, arg1)
 	elseif event == "ACTIONBAR_UPDATE_COOLDOWN" or event == "SPELL_UPDATE_COOLDOWN"
 		or event == "SPELL_UPDATE_CHARGES" then
 		HUDini:UpdateCooldowns()
+		-- The one event where isOnGCD is to trust (TICK-0161): note it
+		-- before the racial and the interrupt outline look.
+		if event == "SPELL_UPDATE_COOLDOWN" and ns.NoteGlobalCooldowns then
+			ns.NoteGlobalCooldowns()
+		end
 		-- Your racial comes off cooldown, or goes on it, with the debuff
 		-- still on you.
 		if ns.UpdateRacialGlow then ns.UpdateRacialGlow() end
@@ -2195,11 +2217,339 @@ end
 local function AuraCommand()
 	if not ns.ReportAura then return end
 	ns.ReportAura(Detail, Say)
+	if ns.BuffWatchReport then ns.BuffWatchReport(Detail) end
 	if ns.SaveReport then
 		ns.SaveReport()
 		Say(Text("debug.saved"))
 	end
 end
+
+--------------------------------------------------------------------------------
+-- /hud debug cooldown <spell>: the probe for the cooldown spike (TICK-0156).
+-- It finds out in the game what the API docs leave open: which cooldown
+-- values are secret, when SPELL_UPDATE_COOLDOWN fires (does it fire when a
+-- cooldown ends?), whether a Cooldown frame says when it is done, and
+-- whether a bar and a text run from a duration object. It shows a test bar
+-- above the HUD. It never compares or joins a secret: Show() prints the
+-- word "secret" for one. It runs until /hud debug cooldown stop, or for ten
+-- minutes, then saves its lines in HUDiniDB.lastReport.
+--------------------------------------------------------------------------------
+-- locale: skip a debug report (/hud debug cooldown), in English
+local cdProbe
+
+local function Show(v)
+	if IsSecret(v) then return "secret" end
+	return tostring(v)
+end
+
+-- One field of a table the game returned, or "error".
+local function ProbeField(t, k)
+	local ok, v = pcall(function() return t[k] end)
+	return ok and Show(v) or "error"
+end
+
+-- obj:method(...), shown; "missing" when the client lacks the method.
+local function ProbeAsk(obj, method, ...)
+	if not (obj and obj[method]) then return "missing" end
+	local ok, v = pcall(obj[method], obj, ...)
+	return ok and Show(v) or "error"
+end
+
+-- obj:method(...) for its effect: "ok", "missing", or the error's start.
+local function Try(obj, method, ...)
+	if not (obj and obj[method]) then return "missing" end
+	local ok, err = pcall(obj[method], obj, ...)
+	if ok then return "ok" end
+	return "error " .. (IsSecret(err) and "secret" or tostring(err):sub(1, 60))
+end
+
+local function ProbeLog(line)
+	local p = cdProbe
+	line = ("%6.1f %s"):format(GetTime() - p.t0, line)
+	p.lines[#p.lines + 1] = line
+	Detail("  " .. line)
+end
+
+-- True while the spell is on its own cooldown (isActive, and not only the
+-- global cooldown), false when it is not, nil when unknown. Both fields
+-- are never secret (SpellSharedDocumentation.lua:26, :30), but a secret
+-- one still counts as unknown. The doc trusts isOnGCD only inside
+-- SPELL_UPDATE_COOLDOWN, so the poll waits out the global cooldown
+-- (ProbePoll).
+local function ProbeActive()
+	local ok, info = pcall(C_Spell.GetSpellCooldown, cdProbe.id)
+	if not (ok and info) then return nil end
+	local okA, active, gcd = pcall(function() return info.isActive, info.isOnGCD end)
+	if not okA or IsSecret(gcd) then return nil end
+	active = Plain(active)
+	if active == nil then return nil end
+	return (active and not gcd) and true or false
+end
+
+-- isActive of the spell's charges, plain, or nil (no charges, or unknown).
+local function ProbeCharges()
+	local ok, info = pcall(C_Spell.GetSpellCharges, cdProbe.id)
+	if not (ok and info) then return nil end
+	local okA, active = pcall(function() return info.isActive end)
+	if not okA then return nil end
+	return Plain(active)
+end
+
+-- Everything the game says about the spell's cooldown now.
+local function ProbeState(why)
+	local id = cdProbe.id
+	local R = _G.C_RestrictedActions
+	local restricted = "missing"
+	if R and R.IsAddOnRestrictionActive and Enum.AddOnRestrictionType then
+		local ok, v = pcall(R.IsAddOnRestrictionActive, Enum.AddOnRestrictionType.Combat)
+		restricted = ok and Show(v) or "error"
+	end
+	ProbeLog(("%s: lockdown=%s combatRestriction=%s"):format(why,
+		tostring(InCombatLockdown()), restricted))
+
+	local ok, info = pcall(C_Spell.GetSpellCooldown, id)
+	if ok and info then
+		ProbeLog(("  GetSpellCooldown isEnabled=%s isActive=%s isOnGCD=%s startTime=%s duration=%s"):format(
+			ProbeField(info, "isEnabled"), ProbeField(info, "isActive"), ProbeField(info, "isOnGCD"),
+			ProbeField(info, "startTime"), ProbeField(info, "duration")))
+	else
+		ProbeLog("  GetSpellCooldown " .. (ok and "nil" or "error"))
+	end
+
+	local okC, charges = pcall(C_Spell.GetSpellCharges, id)
+	if okC and charges then
+		ProbeLog(("  GetSpellCharges maxCharges=%s currentCharges=%s isActive=%s"):format(
+			ProbeField(charges, "maxCharges"), ProbeField(charges, "currentCharges"), ProbeField(charges, "isActive")))
+	end
+
+	local okU, usable, noPower = pcall(C_Spell.IsSpellUsable, id)
+	ProbeLog(("  IsSpellUsable usable=%s insufficientPower=%s"):format(
+		okU and Show(usable) or "error", okU and Show(noPower) or "error"))
+
+	local okD, d = pcall(C_Spell.GetSpellCooldownDuration, id, true)
+	if okD and d then
+		ProbeLog(("  duration HasSecretValues=%s IsZero=%s IsActive=%s HasExpired=%s remaining=%s percent=%s total=%s"):format(
+			ProbeAsk(d, "HasSecretValues"), ProbeAsk(d, "IsZero"), ProbeAsk(d, "IsActive"), ProbeAsk(d, "HasExpired"),
+			ProbeAsk(d, "GetRemainingDuration"), ProbeAsk(d, "GetRemainingPercent"), ProbeAsk(d, "GetTotalDuration")))
+		return d
+	end
+	ProbeLog("  GetSpellCooldownDuration " .. (okD and "nil" or "error"))
+end
+
+-- The test bar: a timer bar with two self-updating texts (time left and
+-- percent left), and an icon with a cooldown swipe.
+local function ProbeFrame()
+	local p = cdProbe
+	if p.frame then return p.frame end
+	-- Above other windows and at a fixed place near the top of the screen:
+	-- DK could not see it on top of the HUD in a fight.
+	local f = CreateFrame("Frame", nil, UIParent)
+	f:SetFrameStrata("DIALOG")
+	f:SetSize(300, 40)
+	f:SetPoint("TOP", UIParent, "TOP", 0, -180)
+	f.icon = f:CreateTexture(nil, "ARTWORK")
+	f.icon:SetSize(40, 40)
+	f.icon:SetPoint("LEFT")
+	f.cd = CreateFrame("Cooldown", nil, f, "CooldownFrameTemplate")
+	f.cd:SetAllPoints(f.icon)
+	f.cd:SetScript("OnCooldownDone", function()
+		if cdProbe and cdProbe.running then
+			ProbeLog("Cooldown frame: OnCooldownDone")
+			ProbeState("after OnCooldownDone")
+		end
+	end)
+	f.bar = CreateFrame("StatusBar", nil, f)
+	f.bar:SetPoint("LEFT", f.icon, "RIGHT", 4, 0)
+	f.bar:SetSize(256, 24)
+	f.bar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
+	f.bar:SetStatusBarColor(0.3, 0.6, 1)
+	local bg = f.bar:CreateTexture(nil, "BACKGROUND")
+	bg:SetAllPoints()
+	bg:SetColorTexture(0, 0, 0, 0.6)
+	f.timeText = f.bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	f.timeText:SetPoint("LEFT", 4, 0)
+	f.pctText = f.bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	f.pctText:SetPoint("RIGHT", -4, 0)
+	p.frame = f
+	return f
+end
+
+-- Hand one duration object to the bar, the swipe and both texts, and log
+-- what each call said. The percent text uses "%.2f" so the log shows
+-- whether the game counts percent as 0-1 or 0-100.
+local function ProbeFeed(d, why)
+	local f = ProbeFrame()
+	f:Show()
+	local U, S = _G.C_DurationUtil, _G.C_StringUtil
+	local SB, DT = Enum.StatusBarInterpolation, Enum.StatusBarTimerDirection
+	local bar = Try(f.bar, "SetTimerDuration", d, SB and SB.Immediate or 0,
+		DT and DT.RemainingTime or 1)
+	local swipe = Try(f.cd, "SetCooldownFromDurationObject", d)
+	local timeB, pctB = "missing", "missing"
+	if U and U.CreateDurationTextBinding and S then
+		if not f.timeBind then
+			f.timeBind = U.CreateDurationTextBinding()
+			Try(f.timeBind, "SetFontString", f.timeText)
+			if S.CreateSecondsFormatter then
+				Try(f.timeBind, "SetFormatter", S.CreateSecondsFormatter())
+			end
+			f.pctBind = U.CreateDurationTextBinding()
+			Try(f.pctBind, "SetFontString", f.pctText)
+			local P = Enum.DurationTextBindingProperty
+			if S.CreateNumericRuleFormatter and P then
+				local fmt = S.CreateNumericRuleFormatter()
+				Try(fmt, "SetBreakpoints", { { threshold = 0, format = "%.2f" } })
+				Try(f.pctBind, "SetTextFormat", "{}", { { property = P.RemainingPercent, formatter = fmt } })
+			end
+		end
+		timeB = Try(f.timeBind, "SetDuration", d) .. "/" .. Try(f.timeBind, "Enable")
+		pctB = Try(f.pctBind, "SetDuration", d) .. "/" .. Try(f.pctBind, "Enable")
+	end
+	ProbeLog(("feed (%s): SetTimerDuration=%s SetCooldownFromDurationObject=%s timeText=%s percentText=%s"):format(
+		why, bar, swipe, timeB, pctB))
+	ProbeLog(("  read back: bar value=%s timeText=%s percentText=%s timeBinding HasSecretValues=%s"):format(
+		ProbeAsk(f.bar, "GetValue"), ProbeAsk(f.timeBind, "GetFormattedText"),
+		ProbeAsk(f.pctBind, "GetFormattedText"), ProbeAsk(f.timeBind, "HasSecretValues")))
+end
+
+-- A cooldown state change, seen by an event or by the 0.1 s poll. Each
+-- source keeps its own last state, so the log shows which one saw the end
+-- of a cooldown first, and whether the event saw it at all. firstSeen is
+-- when the poll first saw the new state (it logs the change later).
+local function ProbeSeen(source, active, firstSeen)
+	local p = cdProbe
+	if active == nil or active == p.last[source] then return end
+	local was = p.last[source]
+	p.last[source] = active
+	if was == nil then return end
+	local first = firstSeen and (" (first seen at %.1f)"):format(firstSeen - p.t0) or ""
+	ProbeLog(("%s: on cooldown %s -> %s%s"):format(source, tostring(was), tostring(active), first))
+	local d = ProbeState("after " .. source)
+	if active and d then ProbeFeed(d, source) end
+end
+
+-- The poll counts a new state only once it has held for POLL_HOLD seconds,
+-- longer than a global cooldown, so another spell's global cooldown (which
+-- can show in isOnGCD outside the event) is not logged as a change.
+local POLL_HOLD = 1.6
+
+local function ProbePoll()
+	local p = cdProbe
+	local active = ProbeActive()
+	if active == nil or active == p.last.poll then
+		p.pending = nil
+		return
+	end
+	local now = GetTime()
+	if not p.pending or p.pending.state ~= active then
+		p.pending = { state = active, since = now }
+	elseif now - p.pending.since >= POLL_HOLD then
+		local since = p.pending.since
+		p.pending = nil
+		ProbeSeen("poll", active, since)
+	end
+end
+
+local function ProbeStop()
+	local p = cdProbe
+	if not (p and p.running) then return end
+	p.running = false
+	p.events:UnregisterAllEvents()
+	p.poll:Set(false)
+	if p.timer then p.timer:Cancel() end
+	ProbeLog(("stop: %d SPELL_UPDATE_COOLDOWN events (%d for this spell, %d for all spells)"):format(
+		p.count.all, p.count.mine, p.count.none))
+	if p.frame then
+		if p.frame.timeBind then Try(p.frame.timeBind, "Disable") end
+		if p.frame.pctBind then Try(p.frame.pctBind, "Disable") end
+		p.frame:Hide()
+	end
+	local lines = {}
+	for i, line in ipairs(p.lines) do lines[i] = line end
+	HUDiniDB.lastReport = lines
+	HUDiniDB.lastReportAt = date("%Y-%m-%d %H:%M:%S")
+	Say(Text("debug.saved"))
+end
+
+local function ProbeEvent(_, event, a, b)
+	local p = cdProbe
+	if event == "SPELL_UPDATE_COOLDOWN" then
+		p.count.all = p.count.all + 1
+		local spellID, baseID = Plain(a), Plain(b)
+		if spellID == nil and baseID == nil then
+			p.count.none = p.count.none + 1
+		elseif spellID == p.id or baseID == p.id then
+			p.count.mine = p.count.mine + 1
+		else
+			return
+		end
+		ProbeSeen("event", ProbeActive())
+	elseif event == "SPELL_UPDATE_CHARGES" then
+		ProbeSeen("charges", ProbeCharges())
+	elseif event == "ADDON_RESTRICTION_STATE_CHANGED" then
+		ProbeLog(("ADDON_RESTRICTION_STATE_CHANGED type=%s state=%s"):format(Show(a), Show(b)))
+	elseif event == "PLAYER_REGEN_DISABLED" then
+		ProbeState("combat starts")
+	elseif event == "PLAYER_REGEN_ENABLED" then
+		ProbeState("combat ends")
+	end
+end
+
+local function CooldownCommand(rest)
+	local arg = rest:match("^%S+%s+(.-)%s*$") or ""
+	if arg:lower() == "stop" then
+		if cdProbe and cdProbe.running then ProbeStop() else Say("No cooldown probe is running.") end
+		return
+	end
+	-- A spell ID is a whole number from 1 to 2^31 - 1, and the game must
+	-- know its name, before anything starts.
+	local id = tonumber(arg)
+	if id and not (id >= 1 and id <= 2147483647 and id == math.floor(id)) then
+		id = nil
+	elseif not id and arg ~= "" then
+		local ok, info = pcall(C_Spell.GetSpellInfo, arg)
+		id = ok and info and Plain(info.spellID) or nil
+	end
+	local name
+	if id then
+		local ok, n = pcall(C_Spell.GetSpellName, id)
+		name = ok and Plain(n) or nil
+		if type(name) ~= "string" or name == "" then id = nil end
+	end
+	if not id then
+		Say("Use /hud debug cooldown <spell name or ID>, then /hud debug cooldown stop.")
+		return
+	end
+	if cdProbe and cdProbe.running then ProbeStop() end
+
+	cdProbe = cdProbe or {}
+	local p = cdProbe
+	p.id, p.t0, p.lines, p.running = id, GetTime(), {}, true
+	p.last, p.pending = {}, nil
+	p.count = { all = 0, mine = 0, none = 0 }
+	if not p.events then
+		p.events = CreateFrame("Frame")
+		p.events:SetScript("OnEvent", ProbeEvent)
+		p.poll = ns.Ticker(0.1, ProbePoll)
+	end
+	for _, event in ipairs({ "SPELL_UPDATE_COOLDOWN", "SPELL_UPDATE_CHARGES",
+		"ADDON_RESTRICTION_STATE_CHANGED", "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED" }) do
+		pcall(p.events.RegisterEvent, p.events, event)
+	end
+	p.timer = C_Timer.NewTimer(600, ProbeStop)
+
+	Say(("Cooldown probe on %s (spell %d). Cast it out of combat, then in combat. Stop with /hud debug cooldown stop."):format(
+		name, id))
+	local f = ProbeFrame()
+	local okT, texture = pcall(C_Spell.GetSpellTexture, id)
+	f.icon:SetTexture(okT and Plain(texture) or nil)
+	f:Show()
+	p.last.event, p.last.poll, p.last.charges = ProbeActive(), ProbeActive(), ProbeCharges()
+	local d = ProbeState("start")
+	if d then ProbeFeed(d, "start") end
+	p.poll:Set(true)
+end
+-- locale: end
 
 -- /hud debug <word>: tools for a bug report, not settings. They sit under
 -- one word so the command list stays about what players set.
@@ -2211,6 +2561,7 @@ local DEBUG = {
 		ns.CheckSpellIDs(Say, Detail)
 	end },
 	{ "weapon", "debug.weapon", WeaponCommand },
+	{ "cooldown", "debug.cooldown", CooldownCommand },
 	{ "modules", "debug.modules", function()
 		-- "1 event", "2 events".
 		local function Count(n, word) return ("%d %s%s"):format(n, word, n == 1 and "" or "s") end
@@ -2228,7 +2579,7 @@ local DEBUG = {
 local function DebugCommand(rest)
 	local word = (rest:match("^(%S*)") or ""):lower()
 	for _, d in ipairs(DEBUG) do
-		if d[1] == word then return d[3]() end
+		if d[1] == word then return d[3](rest) end
 	end
 	if word ~= "" then Say(Text("debug.noTool", word)) end
 	Say(Text("debug.tools"))
@@ -2390,7 +2741,7 @@ local COMMANDS = {
 	{ section = "help.section.help" },
 	{ "help",    "[command]",              "help.help", function(rest) HelpCommand(rest) end },
 	{ "version", "",                       "help.version", VersionCommand },
-	{ "debug",   "list|api|aura|modules|ids|weapon", "help.debug", DebugCommand }, -- locale: skip command syntax
+	{ "debug",   "list|api|aura|modules|ids|weapon|cooldown", "help.debug", DebugCommand }, -- locale: skip command syntax
 	{ "reset",   "settings|class|yes|no",  "help.reset", ResetCommand }, -- locale: skip command syntax
 }
 

@@ -95,3 +95,30 @@ H.test("Detail prints a debug line as it is, with no prefix", function()
 	ns.Detail("  Money: 5")
 	H.eq(w.printed[#w.printed], "  Money: 5")
 end)
+
+-- TICK-0167: WoW Forever's PlaySound returns nothing, with no error, for a
+-- kit its data lacks (DK's /run test: 353392 and 353397).
+H.test("PlaySoundFirst plays the first kit the game can play", function()
+	local w = H.world()
+	local tried = {}
+	local plays = { [8959] = true }
+	w.env.PlaySound = function(kit)
+		tried[#tried + 1] = kit
+		if plays[kit] then return true, 1 end
+	end
+	local ns = w:load("Util.lua")
+	H.eq(ns.PlaySoundFirst({ 353397, 8959, 8960 }), 8959, "the first that plays")
+	H.eq(table.concat(tried, " "), "353397 8959", "it stops there")
+	plays[353397] = true
+	tried = {}
+	H.eq(ns.PlaySoundFirst({ 353397, 8959 }), 353397, "a client that has the first")
+	H.eq(#tried, 1, "only that one")
+	plays = {}
+	H.eq(ns.PlaySoundFirst({ 353397, 8959 }), nil, "none plays: nil")
+	w.env.PlaySound = function(kit) if kit == 1 then error("bad kit") end return true end
+	H.eq(ns.PlaySoundFirst({ 1, 8959 }), 8959, "an error is the next kit")
+	local channel
+	w.env.PlaySound = function(_, ch) channel = ch return true end
+	ns.PlaySoundFirst({ 8959 }, "Master")
+	H.eq(channel, "Master", "the channel is handed on")
+end)

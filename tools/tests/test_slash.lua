@@ -148,7 +148,7 @@ H.test("/hud help lists the HUD, your lists and help", function()
 	w:slash("/hud help")
 	H.ok(H.printed(w, L(w, "help.section.hud") .. ":|r options, setup, why, lock, unlock, test"), "HUD and setup")
 	H.ok(H.printed(w, L(w, "help.section.lists") .. ":|r buffs [forget Name|clear], auramap [Spell = Buff], feedignore [item|clear], feedsession [reset], xp reset"), "Lists and session totals")
-	H.ok(H.printed(w, L(w, "help.section.help") .. ":|r help [command], version, debug list|api|aura|modules|ids|weapon, reset settings|class|yes|no"), "Help and troubleshooting")
+	H.ok(H.printed(w, L(w, "help.section.help") .. ":|r help [command], version, debug list|api|aura|modules|ids|weapon|cooldown, reset settings|class|yes|no"), "Help and troubleshooting")
 end)
 
 H.test("a word with no command changes nothing", function()

@@ -6,15 +6,20 @@
 
 local AI, IB = 7, 8   -- Arcane Intellect, Ice Barrier
 
+local Classes = assert(loadstring(H.readFile("tools/tests/classes_fixture.lua")))()
+
 -- Make every alert icon once: test mode shows them all, then puts them back.
 local function ShowAll(ns)
 	ns.ShowAlertSamples(true)
 	ns.ShowAlertSamples(false)
 end
 
--- A Mage who knows Arcane Intellect and Ice Barrier, with no aura on.
+-- A Mage who knows Arcane Intellect and Ice Barrier, with no aura on. The
+-- test Mage (classes_fixture.lua): its missing item row (TICK-0182) names a
+-- spell this Mage does not know, so only test mode shows that icon.
 local function World()
 	local w = H.world()
+	Classes.Use(w)
 	w.class, w.className = "MAGE", "Mage"
 	local env = w.env
 	local names = { [AI] = "Arcane Intellect", [IB] = "Ice Barrier" }
@@ -79,6 +84,7 @@ local function Names(list)
 		out[i] = (rawget(f, "isBait") and "bait")
 			or ((t == "tex" .. AI or Sample("Spell_Holy_MagicalSentry")) and "ownBuff")
 			or ((t == "tex" .. IB or Sample("Ability_Warrior_BattleShout")) and "keepUp")
+			or (t == 134400 and "item")
 			or tostring(t)
 	end
 	return table.concat(out, ",")
@@ -184,8 +190,8 @@ H.test("the test mode samples take the same places", function()
 	local w, ns = World()
 	ns.ShowAlertSamples(true)
 	local chain = LeftChain(w, ns.GetBar("health"))
-	H.eq(Names(chain), "keepUp,ownBuff,bait", "three samples left of your health bar")
-	H.eq(rawget(chain[3], "isBait"), true, "No bait last")
+	H.eq(Names(chain), "keepUp,ownBuff,item,bait", "four samples left of your health bar")
+	H.eq(rawget(chain[4], "isBait"), true, "No bait last")
 	H.eq(#LeftChain(w, ns.GetBar("targethealth")), 1, "the target's buff sample")
 	NothingRight(w, ns.GetBar("health"))
 end)

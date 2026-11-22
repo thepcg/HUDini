@@ -91,6 +91,9 @@ EXACT = [
     ("Cleanse", "Classes/Paladin.lua", "the Paladin spell"),
     ("Mana Shield", "Classes/Mage.lua", "the Mage spell"),
     ("Shield Bash", "Classes/Warrior.lua", "the Warrior spell"),
+    ("Shield Wall", "Classes/Warrior.lua", "the Warrior spell"),
+    ("Divine Shield", "Classes/Paladin.lua", "the Paladin spell"),
+    ("Lightning Shield", "Classes/Shaman.lua", "the Shaman spell"),
     ("Auto", "Locales/enUS.lua", "the feed's Line side choice, not class default"),
 ]
 

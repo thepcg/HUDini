@@ -3,9 +3,9 @@
 
 local NAMES = {
 	[1] = "Devotion Aura", [2] = "Retribution Aura",          -- no end
-	[3] = "Blessing of Might", [4] = "Blessing of Wisdom",    -- 5 minutes
+	[3] = "Blessing of Might", [4] = "Blessing of Wisdom",    -- 1 hour on Forever
 }
-local DURATION = { [1] = 0, [2] = 0, [3] = 300, [4] = 300 }
+local DURATION = { [1] = 0, [2] = 0, [3] = 3600, [4] = 3600 }
 
 local function Paladin()
 	local w = H.world()
@@ -62,8 +62,7 @@ H.test("a paladin with no aura, or no blessing, misses one", function()
 	H.eq((After(ns, on, 4)), true, "no aura")
 	local w
 	ns, on, w = Paladin()
-	H.eq((After(ns, on, 2)), false, "no blessing, out of a fight: a 5-minute buff (D-033)")
-	-- Seen off before the fight, so off in it.
+	H.eq((After(ns, on, 2)), true, "no blessing, out of a fight: a 1-hour buff shows (D-033)")
 	w.combat = true
 	ns.UpdateBuffMissing()
 	H.eq(ns.buffMissing, true, "no blessing, in a fight")

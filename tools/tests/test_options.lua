@@ -4,6 +4,9 @@
 -- for any class; and the pages come in the layout's order. The harness
 -- fakes already throw on AddShownPredicate and SetParentInitializer.
 
+-- Test class profiles, not the live class files (classes_fixture.lua).
+local Classes = assert(loadstring(H.readFile("tools/tests/classes_fixture.lua")))()
+
 local CLASSES = { "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN", "MAGE", "WARLOCK", "DRUID" }
 
 -- options-layout.md "Saved values with no row": changed by a drag or a
@@ -16,7 +19,7 @@ local NO_ROW = {
 }
 
 -- Settings whose row a later branch adds. The test fails once the row is
--- there, so the line goes with the row.
+-- there, so the line goes with the row. A color: "colors.<key>".
 local ROW_PENDING = {}
 
 -- Saved values a proxy row writes for them.
@@ -26,9 +29,10 @@ local PAGES = { "HUDini", "Icons", "Bars", "Colors", "Alerts", "Your class", "Fe
 
 -- A world logged in as class, with every setting and every row on each
 -- page kept in order. db, if given, is the saved HUDiniDB at login.
-local function PanelWorld(class, db)
+local function PanelWorld(class, db, before)
 	local w = H.world()
 	if db then w.env.HUDiniDB = db end
+	if before then before(w) end
 	w.class, w.className = class, class:sub(1, 1) .. class:sub(2):lower()
 	w.vars, w.pageOrder, w.pages = {}, {}, {}
 	local S = w.env.Settings
@@ -96,6 +100,8 @@ local function PanelWorld(class, db)
 		return setting
 	end
 	S.RegisterProxySetting = function(_, variable, _, label, default, get, set)
+		-- The game throws on a name it already has (Blizzard_SettingsPanel.lua:757).
+		if w.vars[variable] then error("Setting variable '" .. variable .. "' was previously registered.") end
 		w.vars[variable] = { proxy = true, default = default, get = get, set = set, label = label }
 		return Counted(variable)
 	end
@@ -116,6 +122,15 @@ local function PanelWorld(class, db)
 	w:loadAddon()
 	H.ok(current ~= nil, class .. ": the panel was built")
 	return w, w.ns
+end
+
+-- PanelWorld with the test class profiles: for a test that asserts one
+-- class file's data. A test over every class keeps the live files.
+local function ClassWorld(class, db, before)
+	return PanelWorld(class, db, function(w)
+		Classes.Use(w)
+		if before then before(w) end
+	end)
 end
 
 -- TICK-0019 cut the commands to 15; a tooltip must not name one that is
@@ -151,7 +166,12 @@ H.test("every saved setting has a row, or is a saved value with no row", functio
 		for key, v in pairs(ns.defaults) do
 			if type(v) == "table" and key == "colors" then
 				for k in pairs(v) do
-					H.ok(w.vars["HUDini_color_" .. k], class .. ": color " .. k .. " is on the Colors page")
+					if ROW_PENDING["colors." .. k] then
+						H.ok(not w.vars["HUDini_color_" .. k],
+							class .. ": color " .. k .. " has its row now: take it out of ROW_PENDING")
+					else
+						H.ok(w.vars["HUDini_color_" .. k], class .. ": color " .. k .. " is on the Colors page")
+					end
 				end
 			elseif type(v) == "table" and type(NO_ROW[key]) == "table" then
 				for k in pairs(v) do
@@ -183,7 +203,7 @@ H.test("no page has more than 15 rows above Advanced", function()
 end)
 
 H.test("the pages come in the layout's order", function()
-	local w = PanelWorld("MAGE")
+	local w = ClassWorld("MAGE")
 	H.eq(table.concat(w.pageOrder, ", "), table.concat(PAGES, ", "), "page order")
 end)
 
@@ -192,6 +212,7 @@ H.test("the Colors page builds the power rows of your class only", function()
 		local w = PanelWorld(class)
 		local n = 0
 		for _, r in ipairs(w.pages.Colors) do
+			if r.header == "Advanced" then break end
 			if r.row then n = n + 1 end
 		end
 		return n
@@ -210,7 +231,7 @@ local GROUPS = {
 }
 
 H.test("a feed group is checked only when every kind in it is on, and a click sets them all", function()
-	local w = PanelWorld("MAGE")
+	local w = ClassWorld("MAGE")
 	local db = w.env.HUDiniDB
 	local seen = 0
 	for name, kinds in pairs(GROUPS) do
@@ -245,7 +266,7 @@ H.test("a feed group is checked only when every kind in it is on, and a click se
 end)
 
 H.test("a kind row repaints its group, and the group's own change repaints nothing", function()
-	local w = PanelWorld("MAGE")
+	local w = ClassWorld("MAGE")
 	for name, kinds in pairs(GROUPS) do
 		for _, k in ipairs(kinds) do
 			local before = w.notified["HUDini_" .. name]
@@ -274,7 +295,7 @@ local function Values(choices)
 end
 
 H.test("Style is the first row of the HUDini page, a proxy that saves nothing", function()
-	local w = PanelWorld("MAGE")
+	local w = ClassWorld("MAGE")
 	local first = w.pages.HUDini[1]
 	H.eq(first.variable, "HUDini_style", "the first row")
 	H.ok(first.choices, "it is a dropdown")
@@ -283,7 +304,7 @@ H.test("Style is the first row of the HUDini page, a proxy that saves nothing", 
 end)
 
 H.test("Style shows the matching style, or Custom, and lists Custom only then", function()
-	local w = PanelWorld("MAGE")
+	local w = ClassWorld("MAGE")
 	local db, style = w.env.HUDiniDB, w.vars.HUDini_style
 	local choices = w.pages.HUDini[1].choices
 	H.eq(style.get(), "standard", "a new install is Standard")
@@ -295,7 +316,7 @@ H.test("Style shows the matching style, or Custom, and lists Custom only then", 
 end)
 
 H.test("Run setup: the row under Style, a button that opens setup and nothing more", function()
-	local w, ns = PanelWorld("MAGE")
+	local w, ns = ClassWorld("MAGE")
 	local row = w.pages.HUDini[2]
 	H.eq(row.button, "Run setup", "the second row is the Run setup button")
 	H.eq(row.tooltip, "Open setup from the beginning, keeping your current choices.", "the tooltip")
@@ -313,7 +334,7 @@ H.test("Run setup: the row under Style, a button that opens setup and nothing mo
 end)
 
 H.test("Show minimap button: the row under Run setup, on by default, and a change applies", function()
-	local w, ns = PanelWorld("MAGE")
+	local w, ns = ClassWorld("MAGE")
 	local row, v = w.pages.HUDini[3], w.vars.HUDini_minimapButton
 	H.eq(row.variable, "HUDini_minimapButton", "the third row is the minimap button checkbox")
 	H.eq(v.label, "Show minimap button", "the label")
@@ -330,7 +351,7 @@ H.test("Show minimap button: the row under Run setup, on by default, and a chang
 end)
 
 H.test("Flair: the last row of the HUDini page, under Advanced, Light, Modest and Full", function()
-	local w = PanelWorld("MAGE")
+	local w = ClassWorld("MAGE")
 	local rows, flair, advanced = w.pages.HUDini, nil, nil
 	for i, r in ipairs(rows) do
 		if r.header == "Advanced" then advanced = i end
@@ -355,7 +376,7 @@ H.test("Flair: the last row of the HUDini page, under Advanced, Light, Modest an
 end)
 
 H.test("Flair: shows the level HUDini reads, and a pick saves it and prints at that level", function()
-	local w, ns = PanelWorld("MAGE")
+	local w, ns = ClassWorld("MAGE")
 	local db, f = w.env.HUDiniDB, w.vars.HUDini_flair
 	H.eq(f.get(), 0, "a new install: Light")
 	f.set(2)
@@ -397,7 +418,7 @@ H.test("no proxy setting has a function default or a label that is not text (TIC
 end)
 
 H.test("the Style row has no default, so Defaults applies no style", function()
-	local w = PanelWorld("MAGE")
+	local w = ClassWorld("MAGE")
 	local db, style = w.env.HUDiniDB, w.vars.HUDini_style
 	H.eq(style.default, nil, "no default: SetValueToDefault returns false")
 	for _, name in ipairs({ "minimal", "leveling", "standard" }) do
@@ -409,7 +430,7 @@ H.test("the Style row has no default, so Defaults applies no style", function()
 end)
 
 H.test("picking a style writes its five settings and repaints their rows", function()
-	local w = PanelWorld("MAGE")
+	local w = ClassWorld("MAGE")
 	local db, ns, style = w.env.HUDiniDB, w.ns, w.vars.HUDini_style
 	for _, name in ipairs({ "minimal", "leveling", "standard" }) do
 		local before = {}
@@ -430,7 +451,7 @@ H.test("picking a style writes its five settings and repaints their rows", funct
 end)
 
 H.test("a row a style sets repaints Style, and Style's own change repaints nothing", function()
-	local w = PanelWorld("MAGE")
+	local w = ClassWorld("MAGE")
 	for _, k in ipairs(FIVE) do
 		local before = w.notified.HUDini_style
 		for _, fn in ipairs(w.callbacks["HUDini_" .. k]) do fn() end
@@ -479,17 +500,35 @@ end)
 local CLASS_ROWS = {
 	"HUDini_class_interrupt", "HUDini_class_dispel_Curse", "HUDini_class_dispel_Poison",
 	"HUDini_class_dispel_Disease", "HUDini_class_dispel_Magic", "HUDini_class_purge",
-	"HUDini_class_keepUp", "Clear learned buffs", "HUDini_class_resource",
+	"HUDini_class_keepUp", "Clear learned buffs", "HUDini_class_keepUpSound", "HUDini_class_resource",
 	"HUDini_class_resourceStacks",
 }
 
 -- A Mage with these spells on its action bars. Counterspell is ID 2139.
 local function MageWorld(bars)
-	local w, ns = PanelWorld("MAGE")
+	local w, ns = ClassWorld("MAGE")
 	ns.ActionBarSpells = function() return bars or { "Arcane Missiles", "Counterspell", "Fireball" } end
 	ns.KnownSpell = function() return false end
 	w.env.C_Spell.GetSpellName = function(id) return id == 2139 and "Counterspell" or nil end
 	return w, ns, w.env.HUDiniDB.classes.MAGE
+end
+
+-- A Mage with the sound API's list and defaults (TICK-0167), stubbed
+-- before the panel is built; w.played lists each sound played.
+local function SoundWorld()
+	-- The defaults are read when the page is built, so they go in first;
+	-- the addon's own list and player, if any, load over the stubs, so
+	-- those go in again after.
+	local played = {}
+	local function Stub(w)
+		w.ns.AlertSounds = function() return { "readyCheck", "raidWarning", "mapPing" } end
+		w.ns.READY_SOUND_DEFAULT, w.ns.MISSING_SOUND_DEFAULT = "readyCheck", "raidWarning"
+		w.ns.PlayAlertSound = function(k) played[#played + 1] = k; return 1 end
+	end
+	local p, ns = ClassWorld("MAGE", nil, Stub)
+	Stub(p)
+	p.played = played
+	return p, ns
 end
 
 -- The page's row of one setting.
@@ -505,21 +544,47 @@ local function Labels(choices)
 	return table.concat(out, ", ")
 end
 
-H.test("Your class: the class name, then the same 10 rows on every class", function()
+H.test("Your class: the class name, the same 11 rows on every class, then Bell sound and Cooldowns under Advanced", function()
 	for _, class in ipairs(CLASSES) do
 		local w = PanelWorld(class)
 		local rows = w.pages["Your class"]
 		H.eq(rows[1].header, w.className, class .. ": the header is the class name")
 		H.eq(rows[1].tooltip, "Ability and resource choices are shared by characters of this class.", class .. ": the header tooltip")
-		local got, headers = {}, {}
-		for i, r in ipairs(rows) do
-			if r.row then got[#got + 1] = r.variable or r.button end
-			if r.header and i > 1 then headers[#headers + 1] = r.header end
+		-- The character knows none of the class file's cooldown spells yet:
+		-- no cooldown row and no Cooldowns header (TICK-0201).
+		local want = {}
+		for _, v in ipairs(CLASS_ROWS) do want[#want + 1] = v end
+		want[#want + 1] = "HUDini_class_readySound"
+		local function Got()
+			local got, headers = {}, {}
+			for i, r in ipairs(rows) do
+				if r.row then got[#got + 1] = r.variable or r.button end
+				if r.header and i > 1 then headers[#headers + 1] = r.header end
+			end
+			return table.concat(got, ", "), table.concat(headers, ", ")
 		end
-		H.eq(table.concat(got, ", "), table.concat(CLASS_ROWS, ", "), class .. ": the rows")
 		local T = w.ns.TEXT[0]
-		H.eq(table.concat(headers, ", "), table.concat({ T["opt.head.interrupt"], T["opt.head.dispel"],
-			T["opt.head.purge"], T["opt.head.buffs"], T["opt.head.resource"] }, ", "), class .. ": the sections")
+		local sections = { T["opt.head.interrupt"], T["opt.head.dispel"], T["opt.head.purge"],
+			T["opt.head.buffs"], T["opt.head.resource"], T["opt.head.advanced"] }
+		local got, headers = Got()
+		H.eq(got, table.concat(want, ", "), class .. ": the rows, none for an unknown spell")
+		H.eq(headers, table.concat(sections, ", "), class .. ": the sections")
+		-- Learn every spell of the class file and open the options: one
+		-- dropdown per spell (TICK-0157, TICK-0158), in the class file's
+		-- order, under Cooldowns, after Bell sound (TICK-0167).
+		local all, classCount = w.ns.ReadyAlertSpells()
+		H.ok(classCount > 0, class .. ": the class file offers a cooldown spell")
+		w.ns.KnownSpell = function() return true end
+		w.ns.AddMoreSpellRows()
+		for i = 1, classCount do
+			want[#want + 1] = "HUDini_class_cooldown_" .. all[i]:gsub("[^%w]", "")
+			local v = w.vars[want[#want]]
+			H.ok(v and v.proxy, class .. ": " .. all[i] .. " is a proxy row")
+		end
+		sections[#sections + 1] = T["opt.head.cooldowns"]
+		got, headers = Got()
+		H.eq(got, table.concat(want, ", "), class .. ": the rows")
+		H.eq(headers, table.concat(sections, ", "), class .. ": the sections")
 		for _, r in ipairs(rows) do
 			if r.row then H.ok(r.tooltip and r.tooltip ~= "", class .. ": " .. (r.variable or r.button) .. " has a tooltip") end
 		end
@@ -592,7 +657,7 @@ H.test("Your class: a saved spell ID shows as typed when its name is secret or t
 end)
 
 H.test("Your class: a list shows as typed, and a power as the game names it", function()
-	local w, ns = PanelWorld("WARRIOR")
+	local w, ns = ClassWorld("WARRIOR")
 	ns.ActionBarSpells = function() return { "Heroic Strike" } end
 	local mine = w.env.HUDiniDB.classes.WARRIOR
 	local interrupt = ClassRow(w, "HUDini_class_interrupt").choices
@@ -601,11 +666,11 @@ H.test("Your class: a list shows as typed, and a power as the game names it", fu
 	H.eq(Labels(interrupt), "Class default: Pummel, Shield Bash, None, Heroic Strike, Pummel, Shield Bash", "a saved list, never a table")
 	H.ok(not Labels(interrupt):find("table:"), "no raw table")
 
-	local w2, ns2 = PanelWorld("ROGUE")
+	local w2, ns2 = ClassWorld("ROGUE")
 	ns2.ActionBarSpells = function() return {} end
 	w2.env.COMBO_POINTS = "Combo Points"
 	H.eq(Labels(ClassRow(w2, "HUDini_class_resource").choices), "Class default: Combo Points, None", "a Rogue's resource")
-	local w3, ns3 = PanelWorld("HUNTER")
+	local w3, ns3 = ClassWorld("HUNTER")
 	ns3.ActionBarSpells = function() return {} end
 	H.eq(Labels(ClassRow(w3, "HUDini_class_interrupt").choices), "Class default: none, None", "no interrupt in the class file")
 end)
@@ -633,8 +698,11 @@ H.test("Your class: each row's default is Class default, so Defaults resets this
 	H.eq(db.classes.WARRIOR.interrupt, "Pummel", "another class keeps its pick")
 	for _, name in ipairs(CLASS_ROWS) do
 		local v = w.vars[name]
-		if v and name ~= "HUDini_class_resourceStacks" then H.eq(v.default, ns.PICK_DEFAULT, name .. ": the default") end
+		if v and name ~= "HUDini_class_resourceStacks" and name ~= "HUDini_class_keepUpSound" then
+			H.eq(v.default, ns.PICK_DEFAULT, name .. ": the default")
+		end
 	end
+	H.eq(w.vars.HUDini_class_keepUpSound.default, "off", "Sound when a buff is missing: Off by default")
 	local stacks = w.vars.HUDini_class_resourceStacks
 	H.eq(stacks.default, nil, "Stacks to fill: no default, so Defaults calls no setter")
 	mine.resource = { aura = "Fireball", max = 7 }
@@ -726,7 +794,7 @@ H.test("the class alerts and the class resource bar: on every class, gray while 
 	end
 
 	-- A pick on the Your class page changes the gray at once, with no /reload.
-	local w, ns = PanelWorld("HUNTER")
+	local w, ns = ClassWorld("HUNTER")
 	local kick = Find(w.pages.Alerts, "HUDini_glowOnKickable")
 	H.eq(kick.when(), false, "a hunter has no interrupt: gray")
 	w.vars.HUDini_class_interrupt.set("Scatter Shot")
@@ -749,7 +817,105 @@ H.test("the class alerts and the class resource bar: on every class, gray while 
 	H.eq(When("Bars", "HUDini_showResource"), false, "a mage has no resource: gray")
 	m.vars.HUDini_class_resource.set("Arcane Missiles")
 	H.eq(When("Bars", "HUDini_showResource"), true, "a picked resource: active")
-	H.eq(Find(PanelWorld("ROGUE").pages.Bars, "HUDini_showResource").when(), true, "a rogue has combo points")
+	H.eq(Find(ClassWorld("ROGUE").pages.Bars, "HUDini_showResource").when(), true, "a rogue has combo points")
+end)
+
+H.test("Your class: Sound when a buff is missing, gray unless a buff reminder can show", function()
+	-- With no ns.GetKeepUpSoundChoice (the developer's part), the row reads Off
+	-- and a pick does nothing, with no error.
+	local w = MageWorld()
+	local row = ClassRow(w, "HUDini_class_keepUpSound")
+	H.ok(row and row.when, "built, with a gray predicate")
+	H.eq(table.concat(row.regray, ","), "HUDini_showHealth,HUDini_warnOwnBuff,HUDini_warnKeepUp", "re-grays on health and both reminders")
+	w.ns.GetKeepUpSoundChoice, w.ns.SetKeepUpSound, w.ns.AlertSounds, w.ns.PlayAlertSound = nil, nil, nil, nil
+	H.eq(w.vars.HUDini_class_keepUpSound.get(), "off", "no API yet: off")
+	w.vars.HUDini_class_keepUpSound.set("raidWarning")
+	H.eq(Labels(row.choices), "Off", "no API yet: only Off")
+
+	-- A Shaman has no combat buff: Lightning Shield is a personal buff.
+	for _, class in ipairs({ "SHAMAN", "MAGE" }) do
+		local p = ClassWorld(class)
+		local db = p.env.HUDiniDB
+		local when = ClassRow(p, "HUDini_class_keepUpSound").when
+		db.showHealth, db.warnOwnBuff, db.warnKeepUp = true, true, false
+		H.eq(when(), true, class .. ": the personal buff reminder on: active")
+		db.warnOwnBuff, db.warnKeepUp = false, true
+		H.eq(when(), true, class .. ": the combat buff reminder on: active")
+		db.warnKeepUp = false
+		H.eq(when(), false, class .. ": both reminders off: gray")
+		db.warnOwnBuff, db.showHealth = true, false
+		H.eq(when(), false, class .. ": Show your health off: gray")
+	end
+
+	local m, mns = SoundWorld()
+	local saved = "off"
+	mns.GetKeepUpSoundChoice = function() return saved end
+	mns.SetKeepUpSound = function(v)
+		if v == saved then return false end
+		saved = v
+		return true
+	end
+	local v = m.vars.HUDini_class_keepUpSound
+	H.eq(v.get(), "off", "off by default")
+	H.eq(Labels(ClassRow(m, "HUDini_class_keepUpSound").choices),
+		"Off, Ready check, Raid warning (default), Map ping", "Off, then each sound; the buff default is marked")
+	v.set("mapPing")
+	H.eq(saved, "mapPing", "a pick saves through ns.SetKeepUpSound")
+	H.eq(v.get(), "mapPing", "and reads back through ns.GetKeepUpSoundChoice")
+	H.eq(table.concat(m.played, ","), "mapPing", "a pick plays its sound once")
+	v.set("mapPing")
+	H.eq(#m.played, 1, "no change: no sound")
+	v.set("off")
+	H.eq(#m.played, 1, "Off plays nothing")
+end)
+
+H.test("every sound has a name at every flair level, not a raw key", function()
+	-- The names are built at run time ("sound." .. key), so the locale
+	-- check cannot see them. The eight keys of TICK-0167, and the list the
+	-- code offers once it exists.
+	local w = ClassWorld("MAGE")
+	local keys = { "readyCheck", "raidWarning", "mapPing", "whisper", "bossEmote", "alarmClock", "pvpQueue", "coins" }
+	for _, k in ipairs(w.ns.AlertSounds and w.ns.AlertSounds() or {}) do keys[#keys + 1] = k end
+	for level = 0, 2 do
+		w.env.HUDiniDB.flair = level
+		for _, k in ipairs(keys) do
+			local name = w.ns.Text("sound." .. k)
+			H.ok(name ~= "sound." .. k and name ~= "", "level " .. level .. ": " .. k .. " has a name")
+		end
+	end
+end)
+
+H.test("Your class: Bell sound, under Advanced, picks one sound for every bell", function()
+	-- With no ns.GetReadySound (the developer's part), the row shows no
+	-- sound and a pick does nothing, with no error.
+	local w = MageWorld()
+	local row = ClassRow(w, "HUDini_class_readySound")
+	H.ok(row and not row.when, "built, never gray")
+	local default = w.ns.READY_SOUND_DEFAULT
+	w.ns.GetReadySound, w.ns.SetReadySound, w.ns.PlayAlertSound = nil, nil, nil
+	H.eq(w.vars.HUDini_class_readySound.get(), default, "no API yet: the default, if any")
+	w.vars.HUDini_class_readySound.set("mapPing")
+
+	local m, mns = SoundWorld()
+	local saved
+	mns.GetReadySound = function() return saved or mns.READY_SOUND_DEFAULT end
+	mns.SetReadySound = function(k)
+		if k == mns.GetReadySound() then return false end
+		saved = k
+		return true
+	end
+	local v = m.vars.HUDini_class_readySound
+	H.eq(v.default, "readyCheck", "Defaults goes back to the bell default")
+	H.ok(v.default ~= m.vars.HUDini_class_keepUpSound.default, "the two defaults differ")
+	H.eq(v.get(), "readyCheck", "the default at the start")
+	H.eq(Labels(ClassRow(m, "HUDini_class_readySound").choices),
+		"Ready check (default), Raid warning, Map ping", "each sound, no Off; the bell default is marked")
+	v.set("mapPing")
+	H.eq(saved, "mapPing", "a pick saves through ns.SetReadySound")
+	H.eq(v.get(), "mapPing", "and reads back")
+	H.eq(table.concat(m.played, ","), "mapPing", "a pick plays its sound once")
+	v.set("mapPing")
+	H.eq(#m.played, 1, "no change: no sound")
 end)
 
 -- TICK-0025: every word in the panel comes from Locales/enUS.lua. A key
@@ -793,7 +959,7 @@ end)
 -- writes the text at the new level into every row whose tooltip is a text
 -- key, at once, also the dispel rows, whose tooltip joins in the kind.
 H.test("every tooltip follows the Flair setting at once", function()
-	local w, ns = PanelWorld("MAGE")
+	local w, ns = ClassWorld("MAGE")
 	local function At(level, key, ...)
 		for l = level, 0, -1 do
 			local s = ns.TEXT[l][key]
@@ -878,7 +1044,7 @@ local function IdleTip(w)
 end
 
 H.test("a flair pick in HUDini setup reaches the options' flair tooltips", function()
-	local w, ns = PanelWorld("MAGE")
+	local w, ns = ClassWorld("MAGE")
 	w:runTimers()
 	local win = w.env.HUDiniSetup
 	H.ok(win and win:IsShown(), "setup opens for a new player")
@@ -894,7 +1060,7 @@ H.test("a flair pick in HUDini setup reaches the options' flair tooltips", funct
 end)
 
 H.test("/hud reset settings brings the flair tooltips back to level 0", function()
-	local w, ns = PanelWorld("MAGE")
+	local w, ns = ClassWorld("MAGE")
 	w.vars.HUDini_flair.set(2)
 	H.eq(IdleTip(w), ns.TEXT[2]["opt.hideWhenIdle.tip"], "level 2 after the setter")
 	w:slash("/hud reset settings")
@@ -909,7 +1075,7 @@ H.test("Bars: Druid mana in forms is gray unless Power bar is on, and gray on an
 			if r.variable == "HUDini_showDruidMana" then return r end
 		end
 	end
-	local w = PanelWorld("DRUID")
+	local w = ClassWorld("DRUID")
 	local row = Row(w)
 	H.ok(row and row.when, "a druid: the row has a gray predicate")
 	H.eq(table.concat(row.regray, ","), "HUDini_showPower", "Power bar re-grays it")
@@ -918,7 +1084,7 @@ H.test("Bars: Druid mana in forms is gray unless Power bar is on, and gray on an
 	H.eq(row.when(), false, "Power bar off: gray")
 	-- A class whose powers are MANA alone has no form with another power.
 	for _, class in ipairs({ "MAGE", "PALADIN", "PRIEST", "SHAMAN", "WARLOCK", "WARRIOR" }) do
-		local other = Row(PanelWorld(class))
+		local other = Row(ClassWorld(class))
 		H.eq(other.when(), false, class .. ": gray")
 	end
 end)
@@ -927,7 +1093,7 @@ end)
 -- has no Hide gryphons row; a header says Edit Mode hides them, and its
 -- tooltip names Edit Mode's box at the flair level now.
 H.test("Game frames: no Hide gryphons row; a header teaches Edit Mode's box, at every flair level", function()
-	local w, ns = PanelWorld("MAGE")
+	local w, ns = ClassWorld("MAGE")
 	local T, box = ns.TEXT, ns.GryphonBoxName()
 	local header
 	for _, page in ipairs(w.pageOrder) do
@@ -944,4 +1110,255 @@ H.test("Game frames: no Hide gryphons row; a header teaches Edit Mode's box, at 
 		ns.RetextFlairTips()
 		H.eq(header.tooltip, T[level]["opt.head.gryphons.tip"]:format(box), "level " .. level)
 	end
+end)
+
+H.test("Your class: a cooldown row saves a bell, a timer bar or both for this class only", function()
+	local w = ClassWorld("SHAMAN")
+	local ns = w.ns
+	ns.KnownSpell = function(spell) return spell == "Mana Tide Totem" end
+	ns.AddMoreSpellRows()
+	local row = w.vars.HUDini_class_cooldown_ManaTideTotem
+	H.ok(row and row.proxy, "Mana Tide Totem has a row")
+	H.eq(row.get(), "off", "off at the start")
+	row.set("bell")
+	H.eq(ns.GetReadyAlert("Mana Tide Totem"), true, "Bell turns the bell on")
+	H.eq(ns.GetTimerBar("Mana Tide Totem"), false, "and no timer bar")
+	H.eq(w.env.HUDiniDB.classes.SHAMAN.readyAlerts["Mana Tide Totem"], true, "saved for the Shaman")
+	H.eq(row.get(), "bell", "the row reads it back")
+	row.set("bar")
+	H.eq(ns.GetReadyAlert("Mana Tide Totem"), false, "Timer bar turns the bell off")
+	H.eq(w.env.HUDiniDB.classes.SHAMAN.timerBars["Mana Tide Totem"], true, "and saves the bar for the Shaman")
+	H.eq(row.get(), "bar", "the row reads the bar back")
+	row.set("both")
+	H.eq(ns.GetReadyAlert("Mana Tide Totem") and ns.GetTimerBar("Mana Tide Totem"), true, "Bell and timer bar turns both on")
+	H.eq(row.get(), "both", "the row reads both back")
+	row.set("off")
+	H.eq(ns.GetReadyAlert("Mana Tide Totem") or ns.GetTimerBar("Mana Tide Totem"), false, "Off turns both off")
+end)
+
+-- Missing items (TICK-0182): a row only for a known spell (make, or one of
+-- needs) or a saved pick, as the cooldown rows (TICK-0201). w.known[name]
+-- makes a spell known; it can change after the panel is built.
+local function ItemWorld(class, db)
+	return ClassWorld(class, db, function(w)
+		w.known = {}
+		local ids, n = {}, 7000
+		w.env.C_Spell.GetSpellInfo = function(name)
+			if not ids[name] then n = n + 1; ids[name], ids[n] = n, name end
+			return { spellID = ids[name] }
+		end
+		w.env.IsPlayerSpell = function(id) return w.known[ids[id]] == true end
+	end)
+end
+
+local function Headers(rows, T, key)
+	local n = 0
+	for _, r in ipairs(rows) do
+		if r.header == T[key] then n = n + 1 end
+	end
+	return n
+end
+
+H.test("Your class: no missing item row or header for an unknown spell; a learned one adds both at the next open", function()
+	local w = ItemWorld("WARLOCK")
+	local ns, rows, T = w.ns, w.pages["Your class"], w.ns.TEXT[0]
+	H.eq(w.vars.HUDini_class_item_soulstone, nil, "Create Soulstone not known: no row")
+	H.eq(w.vars.HUDini_class_item_soulShard, nil, "Summon Voidwalker not known: no row")
+	H.eq(Headers(rows, T, "opt.head.items"), 0, "no Missing items header")
+	local before = #rows
+	w.known["Summon Voidwalker"] = true
+	ns.AddMoreSpellRows()
+	H.eq(rows[before + 1].header, T["opt.head.items"], "then the header, at the end")
+	H.eq(rows[before + 2].variable, "HUDini_class_item_soulShard", "and the shard row")
+	H.eq(#rows, before + 2, "no other row")
+	ns.AddMoreSpellRows()
+	H.eq(#rows, before + 2, "the next open adds nothing")
+	w.known["Create Soulstone"] = true
+	ns.AddMoreSpellRows()
+	H.eq(rows[before + 3].variable, "HUDini_class_item_soulstone", "a second learned row joins the group")
+	H.eq(Headers(rows, T, "opt.head.items"), 1, "with no second header")
+end)
+
+H.test("Your class: a missing item known at the first open sits before Cooldowns", function()
+	local w = ClassWorld("SHAMAN", nil, function(w)
+		w.env.C_Spell.GetSpellInfo = function(name) return { spellID = name == "Reincarnation" and 20608 or 1 } end
+		w.env.IsPlayerSpell = function(id) return id == 20608 end
+	end)
+	local ns, rows, T = w.ns, w.pages["Your class"], w.ns.TEXT[0]
+	ns.KnownSpell = function() return true end
+	ns.AddMoreSpellRows()
+	local at = {}
+	for i, r in ipairs(rows) do
+		if r.header then at[r.header] = i end
+		if r.variable then at[r.variable] = i end
+	end
+	H.ok(at.HUDini_class_readySound < at[T["opt.head.items"]], "after Bell sound")
+	H.eq(at.HUDini_class_item_ankh, at[T["opt.head.items"]] + 1, "the Ankh row under its header")
+	H.ok(at[T["opt.head.cooldowns"]] and at.HUDini_class_item_ankh < at[T["opt.head.cooldowns"]], "then Cooldowns")
+end)
+
+H.test("Your class: a saved missing item pick shows its row for an unknown spell", function()
+	local w = ItemWorld("WARLOCK", { classes = { WARLOCK = { missingItem = { soulstone = true } } } })
+	H.ok(w.vars.HUDini_class_item_soulstone ~= nil, "saved on: the row")
+	H.eq(w.vars.HUDini_class_item_soulShard, nil, "not saved, not known: no row")
+end)
+
+H.test("Your class: a missing item row reads and saves the row's choice, gray with no health bar", function()
+	local w = ItemWorld("SHAMAN")
+	w.known.Reincarnation = true
+	w.ns.AddMoreSpellRows()
+	local ns = w.ns
+	local row = w.vars.HUDini_class_item_ankh
+	H.ok(row ~= nil, "the Ankh row")
+	H.eq(row.get(), true, "on from the class file")
+	row.set(false)
+	H.eq(ns.GetMissingItem("ankh"), false, "the row turns it off")
+	H.eq(w.env.HUDiniDB.classes.SHAMAN.missingItem.ankh, false, "saved for the Shaman")
+	H.eq(row.get(), false, "the row reads it back")
+	local init
+	for _, r in ipairs(w.pages["Your class"]) do
+		if r.variable == "HUDini_class_item_ankh" then init = r end
+	end
+	H.ok(init and init.when, "gray unless")
+	w.env.HUDiniDB.showHealth = false
+	H.eq(init.when(), false, "gray with no health bar")
+end)
+
+H.test("Your class: Cooldowns, under Advanced, adds each new learned spell once", function()
+	local w = ClassWorld("SHAMAN")
+	local ns = w.ns
+	local rows = w.pages["Your class"]
+	local before = #rows
+	local learned = { "Flame Shock", "Earth Shock" }
+	ns.LearnedCooldownSpells = function() return learned end
+	ns.KnownSpell = function() return false end
+	ns.AddMoreSpellRows()
+	local T = ns.TEXT[0]
+	H.eq(rows[before - 1].header, T["opt.head.advanced"], "under Advanced")
+	H.eq(rows[before].variable, "HUDini_class_readySound", "after Bell sound")
+	H.eq(rows[before + 1].header, T["opt.head.cooldowns"], "then Cooldowns")
+	H.eq(rows[before + 2].variable, "HUDini_class_cooldown_EarthShock", "A to Z: Earth Shock")
+	H.eq(rows[before + 3].variable, "HUDini_class_cooldown_FlameShock", "then Flame Shock")
+	H.eq(#rows, before + 3, "no other row")
+	H.ok(not rows[before + 2].when, "a cooldown row is never gray")
+	local row = w.vars.HUDini_class_cooldown_EarthShock
+	H.eq(row.get(), "off", "off at the start")
+	row.set("both")
+	H.eq(ns.GetReadyAlert("Earth Shock") and ns.GetTimerBar("Earth Shock"), true, "a pick saves the bell and the bar")
+	-- The next open adds only a new spell, at the end, with no second header.
+	learned = { "Earth Shock", "Flame Shock", "Frost Shock" }
+	ns.AddMoreSpellRows()
+	H.eq(#rows, before + 4, "one new row")
+	H.eq(rows[before + 4].variable, "HUDini_class_cooldown_FrostShock", "the new spell at the end")
+	ns.AddMoreSpellRows()
+	H.eq(#rows, before + 4, "an open with nothing new adds nothing")
+	-- The game's path: the options open, and a spell learned since gets its row.
+	learned[#learned + 1] = "Lava Lash"
+	w:Run(w.env.SettingsPanel, "OnShow")
+	H.eq(rows[#rows].variable, "HUDini_class_cooldown_LavaLash", "opening the options adds the new spell")
+	H.eq(#rows, before + 5, "and only that one")
+	-- Names with no letters of a-z (a ruRU client), or the same letters,
+	-- each get a setting of their own: the game throws on a second one.
+	learned[#learned + 1] = "Удар бури"
+	learned[#learned + 1] = "Ледяной шок"
+	learned[#learned + 1] = "Lava-Lash"
+	ns.AddMoreSpellRows()
+	H.eq(#rows, before + 8, "three more rows, no error")
+	-- In a fight the panel adds no row.
+	learned[#learned + 1] = "Stormstrike"
+	w.env.InCombatLockdown = function() return true end
+	ns.AddMoreSpellRows()
+	H.eq(#rows, before + 8, "no row in a fight")
+	-- A class file spell learned later joins the end of the group.
+	w.env.InCombatLockdown = function() return false end
+	ns.KnownSpell = function(spell) return spell == "Heroism" end
+	ns.AddMoreSpellRows()
+	H.eq(rows[#rows - 1].variable, "HUDini_class_cooldown_Heroism", "Heroism, learned, at the end, class spells first")
+	H.eq(rows[#rows].variable, "HUDini_class_cooldown_Stormstrike", "then Stormstrike, learned in the fight")
+	H.eq(#rows, before + 10, "two new rows")
+end)
+
+H.test("Your class: a class file with 13 cooldown spells keeps the top of the page inside 15 rows", function()
+	-- A Priest's file names its own cooldowns and every race's racials
+	-- (TICK-0175). Only the spells you know get a row, and those sit under
+	-- Advanced (TICK-0201).
+	local names = { "Power Infusion", "Inner Focus", "Fear Ward", "Desperate Prayer", "Elune's Grace",
+		"Feedback", "Shadowguard", "Starshards", "Touch of Weakness", "Hex of Weakness",
+		"Devouring Plague", "Psychic Scream", "Shadowfiend" }
+	local w = ClassWorld("PRIEST")
+	local ns = w.ns
+	local rows = w.pages["Your class"]
+	ns.ReadyAlertSpells = function()
+		local out = {}
+		for i, n in ipairs(names) do out[i] = n end
+		return out, #names
+	end
+	ns.LearnedCooldownSpells = function() return {} end
+	local known = { ["Inner Focus"] = true, ["Fear Ward"] = true, ["Psychic Scream"] = true }
+	ns.KnownSpell = function(spell) return known[spell] or false end
+	-- A bell saved for a spell you do not know keeps its row, so you can
+	-- turn it off.
+	w.env.HUDiniDB.classes.PRIEST = w.env.HUDiniDB.classes.PRIEST or {}
+	w.env.HUDiniDB.classes.PRIEST.readyAlerts = { ["Starshards"] = true }
+	ns.AddMoreSpellRows()
+	local above, under, advanced = 0, {}, false
+	for _, r in ipairs(rows) do
+		if r.header == ns.TEXT[0]["opt.head.advanced"] then advanced = true end
+		if r.row and not advanced then above = above + 1 end
+		if r.row and advanced then under[#under + 1] = r.variable end
+	end
+	H.ok(above <= 15, above .. " rows above Advanced")
+	H.eq(table.concat(under, ", "), "HUDini_class_readySound, HUDini_class_cooldown_InnerFocus, "
+		.. "HUDini_class_cooldown_FearWard, HUDini_class_cooldown_Starshards, HUDini_class_cooldown_PsychicScream",
+		"Bell sound, then the known and saved spells in the class file's order")
+end)
+
+H.test("the timer bar look: texture, text and color rows", function()
+	local w = ClassWorld("MAGE")
+	H.eq(w.env.HUDiniDB.timerBarTexture, "hud", "a new install follows the HUD's texture")
+	H.eq(w.env.HUDiniDB.timerBarTime, "seconds", "a new install shows the time left")
+	H.ok(w.vars.HUDini_timerBarTexture, "Timer bar texture has a row")
+	H.ok(w.vars.HUDini_timerBarTime, "Timer bar text has a row")
+	local color = w.vars.HUDini_color_timer
+	H.ok(color and color.proxy, "the timer bar color has a row")
+	local refreshed, saved = 0, nil
+	w.ns.RefreshTimerBars = function() refreshed = refreshed + 1 end
+	w.ns.SetColorHex = function(key, hex) saved = key .. " " .. hex end
+	color.set("ffff0000")
+	H.eq(saved, "timer ffff0000", "a pick saves the color")
+	H.eq(refreshed, 1, "and repaints the timer bars")
+	-- A new texture or text reaches a bar that shows now (TICK-0158 review).
+	local function Pick(key, value)
+		w.env.HUDiniDB[key] = value
+		for _, fn in ipairs(w.callbacks["HUDini_" .. key]) do fn() end
+	end
+	Pick("timerBarTexture", "hud")
+	H.eq(refreshed, 2, "a texture pick repaints the timer bars")
+	Pick("timerBarTime", "percent")
+	H.eq(refreshed, 3, "a text pick repaints the timer bars")
+	-- The color sits under Advanced on the Colors page.
+	local advanced
+	for _, r in ipairs(w.pages.Colors) do
+		if r.header == "Advanced" then advanced = true end
+		if r.variable == "HUDini_color_timer" then H.ok(advanced, "under Advanced") end
+	end
+end)
+
+H.test("Timer bar place: a button right after Timer bar text puts the bars back under the HUD", function()
+	local w = ClassWorld("MAGE")
+	local rows, at = w.pages.Bars, nil
+	for i, r in ipairs(rows) do
+		if r.variable == "HUDini_timerBarTime" then at = i end
+	end
+	local T = w.ns.TEXT[0]
+	local row = rows[at + 1]
+	H.eq(row.button, T["opt.timerBarPlace.button"], "the button, right after Timer bar text")
+	H.ok(row.tooltip and row.tooltip:find("/hud unlock", 1, true), "the tip says how to move the bars")
+	-- With no ns.ResetTimerBarsPlace, a click does nothing, with no error.
+	w.ns.ResetTimerBarsPlace = nil
+	row.click()
+	local calls = 0
+	w.ns.ResetTimerBarsPlace = function() calls = calls + 1; return true end
+	row.click()
+	H.eq(calls, 1, "a click puts the bars back")
 end)

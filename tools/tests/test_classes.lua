@@ -94,6 +94,38 @@ local SHAPE = {
 	weaponBuff = function(v)
 		if not IsList(v) then return "not a list of spell names" end
 	end,
+	readyAlert = function(v)
+		if not IsList(v) then return "not a list of spell names" end
+	end,
+	readyAlertOn = function(v)
+		if not IsList(v) then return "not a list of spell names" end
+	end,
+	keepUpSoundOn = function(v)
+		if type(v) ~= "boolean" then return "not true or false" end
+	end,
+	-- TICK-0182: rows of { key, make | needs, items, buff?, on? }.
+	missingItem = function(v)
+		if type(v) ~= "table" or #v == 0 then return "not a list of rows" end
+		local keys = {}
+		for i, row in ipairs(v) do
+			local at = "row " .. i
+			if type(row) ~= "table" then return at .. " is not a table" end
+			if type(row.key) ~= "string" or row.key == "" then return at .. " has no key" end
+			if keys[row.key] then return at .. " repeats the key " .. row.key end
+			keys[row.key] = true
+			if (row.make == nil) == (row.needs == nil) then return at .. " needs one of make or needs" end
+			if row.make ~= nil and type(row.make) ~= "string" then return at .. ": make is not a spell name" end
+			if row.needs ~= nil and type(row.needs) ~= "string" and not IsList(row.needs) then
+				return at .. ": needs is not a spell name or a list"
+			end
+			if type(row.items) ~= "table" or #row.items == 0 then return at .. " has no items" end
+			for _, id in ipairs(row.items) do
+				if type(id) ~= "number" or id < 1 or id % 1 ~= 0 then return at .. ": an item is not an item ID" end
+			end
+			if row.buff ~= nil and type(row.buff) ~= "string" then return at .. ": buff is not a spell name" end
+			if row.on ~= nil and type(row.on) ~= "boolean" then return at .. ": on is not true or false" end
+		end
+	end,
 	powers = function(v)
 		if not IsList(v) then return "not a list of power tokens" end
 	end,

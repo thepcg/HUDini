@@ -3,8 +3,13 @@
 -- read; the real updates leave the samples up; (false) puts back the real
 -- state.
 
+local Classes = assert(loadstring(H.readFile("tools/tests/classes_fixture.lua")))()
+
+-- The test Mage (classes_fixture.lua), so a class seat's change to
+-- Classes\Mage.lua changes no count here. It has one missing item row, on.
 local function World()
 	local w = H.world()
+	Classes.Use(w)
 	w:loadAddon()
 	return w, w.ns, w.env.HUDiniDB
 end
@@ -58,8 +63,9 @@ H.test("with no target and no auras, every alert sample shows, and goes again", 
 	local w, ns = World()
 	MakeOutline(ns)
 	ns.ShowAlertSamples(true)
-	-- Your buff, keep-up, No bait, the target's buff, two purge icons.
-	H.eq(Shown(Icons(w)), 6, "alert icons shown")
+	-- Your buff, keep-up, the missing item, No bait, the target's buff, two
+	-- purge icons.
+	H.eq(Shown(Icons(w)), 7, "alert icons shown")
 	H.eq(Shown(PurgeIcons(w)), 2, "purge icons shown")
 	H.eq(BaitIcon(w):IsShown(), true, "No bait shown")
 	H.eq(KickOutline(w):IsShown(), true, "the kick outline shows")
@@ -103,7 +109,7 @@ H.test("while the samples are up, the real updates leave them up", function()
 	ns.OnTargetCast(nil, true) -- a target cast bar refresh with no cast
 	w:runTickers()
 	w:runTimers()
-	H.eq(Shown(Icons(w)), 6, "alert icons still shown")
+	H.eq(Shown(Icons(w)), 7, "alert icons still shown")
 	H.eq(KickOutline(w):IsShown(), true, "the kick outline still shows")
 	H.ok(ns.powerTint ~= nil, "the dispel tint stays")
 end)
@@ -117,7 +123,7 @@ H.test("an alert that is turned off shows no sample", function()
 	H.eq(Shown(PurgeIcons(w)), 0, "purge icons, turned off")
 	H.eq(ns.powerTint, nil, "dispel tint, turned off")
 	H.eq(KickOutline(w):IsShown(), false, "kick outline, turned off")
-	H.eq(Shown(Icons(w)), 3, "the other three still show")
+	H.eq(Shown(Icons(w)), 4, "the other four still show")
 	db.showHealth = false
 	ns.ShowAlertSamples(true)
 	H.eq(Shown(Icons(w)), 1, "with the health bar off, only the target's buff")
@@ -162,7 +168,7 @@ H.test("the samples read no unit, spell or aura", function()
 	env.C_Spell.GetSpellInfo = Read
 	ns.ShowAlertSamples(true)
 	H.eq(reads, 0, "unit, spell or aura reads")
-	H.eq(Shown(Icons(w)), 6, "and every sample shows")
+	H.eq(Shown(Icons(w)), 7, "and every sample shows")
 end)
 
 H.test("the bait and target buff tickers leave the samples up", function()
@@ -181,5 +187,5 @@ H.test("the bait and target buff tickers leave the samples up", function()
 	ns.ShowAlertSamples(true)
 	w:runTickers()
 	H.eq(BaitIcon(w):IsShown(), true, "No bait after the bait ticker")
-	H.eq(Shown(Icons(w)), 6, "every sample after the tickers")
+	H.eq(Shown(Icons(w)), 7, "every sample after the tickers")
 end)

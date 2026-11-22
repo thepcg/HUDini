@@ -1,7 +1,13 @@
 -- HUDini setup (D-007, TICK-0042): when it
 -- shows, what each page writes, a second run, every exit, fights, and
--- page 8's alert lines and bars notice. The window itself (how it looks,
+-- step 7 (the page for your class) and page 9's picks and bars notice. The window itself (how it looks,
 -- Enter and Escape in the game) is for the test sitting.
+
+-- Test class profiles, not the live class files (classes_fixture.lua).
+local Classes = assert(loadstring(H.readFile("tools/tests/classes_fixture.lua")))()
+
+-- A new client whose class files are the test profiles.
+local function NewWorld() return Classes.Use(H.world()) end
 
 -- Everything printed from one slash command.
 local function Said(w, line)
@@ -120,7 +126,7 @@ end
 
 -- A new install, logged in, with setup open on page 1.
 local function NewOpen()
-	local w = GameRow(H.world())
+	local w = GameRow(NewWorld())
 	local ns = w:loadAddon()
 	w:runTimers()
 	return w, ns, w.env.HUDiniDB
@@ -128,7 +134,7 @@ end
 
 -- An account that has closed setup once.
 local function Seen()
-	local w = GameRow(H.world())
+	local w = GameRow(NewWorld())
 	w.env.HUDiniDB = { schema = 99, welcomeSeen = true }
 	local ns = w:loadAddon()
 	w:runTimers()
@@ -157,7 +163,7 @@ end
 --------------------------------------------------------------------------------
 
 H.test("a new install opens setup on page 1, about 2 s after the loading screen", function()
-	local w = H.world()
+	local w = NewWorld()
 	local ns = w:loadAddon()
 	H.ok(not IsOpen(w), "not at once")
 	H.eq(w.env.HUDiniDB.welcomeSeen, nil, "not seen yet")
@@ -173,7 +179,7 @@ H.test("setup that never closed opens again at the next login; a later loading s
 	H.ok(IsOpen(w))
 	-- A /reload before it closes: a new session with the same table.
 	local saved = w.env.HUDiniDB
-	local w2 = H.world()
+	local w2 = NewWorld()
 	w2.env.HUDiniDB = saved
 	w2:loadAddon()
 	w2:runTimers()
@@ -185,7 +191,7 @@ H.test("setup that never closed opens again at the next login; a later loading s
 end)
 
 H.test("in a fight at login, setup waits for the fight's end, quietly", function()
-	local w = H.world()
+	local w = NewWorld()
 	w:loadAddon()
 	w.combat = true
 	w:runTimers()
@@ -282,7 +288,7 @@ H.test("a loading screen, a loss of control or Alt-Z does not close setup", func
 	w:fire("PLAYER_ENTERING_WORLD", false, false)
 	w:runTimers()
 	H.ok(IsOpen(w), "still open after a loading screen")
-	H.eq(Parts(w).counter:GetText(), "Step 1 of 6", "on the same page")
+	H.eq(Parts(w).counter:GetText(), "Step 1 of 7", "on the same page")
 	H.eq(db.welcomeSeen, nil)
 	H.eq(ns.setupOpen, true)
 end)
@@ -318,9 +324,9 @@ H.test("Skip setup on page 1 keeps every default, locks and marks setup seen", f
 	for k, v in pairs(before) do H.eq(db[k], v, k) end
 end)
 
-H.test("Start, Next six times and Done gives the defaults: a locked HUD that hides when idle", function()
+H.test("Start, Next seven times and Done gives the defaults: a locked HUD that hides when idle", function()
 	local w, ns, db = NewOpen()
-	for _ = 1, 7 do Next(w) end
+	for _ = 1, 8 do Next(w) end
 	H.eq(Visible(Parts(w).question), "Ready to explore")
 	H.eq(ButtonText(w, "main"), "Finish")
 	Press(w, "main")
@@ -353,11 +359,11 @@ H.test("Escape and the close button close setup the same way as Skip setup", fun
 	H.eq(db.showXP, false, "a pick stays after a skip")
 end)
 
-H.test("page 8's Options button closes setup, then opens the options", function()
+H.test("page 9's Options button closes setup, then opens the options", function()
 	local w, ns, db = NewOpen()
 	local opened = 0
 	ns.OpenOptions = function() opened = opened + 1 end
-	for _ = 1, 7 do Next(w) end
+	for _ = 1, 8 do Next(w) end
 	H.eq(ButtonText(w, "left2"), "Open Options")
 	Press(w, "left2")
 	H.ok(not IsOpen(w))
@@ -405,7 +411,7 @@ end)
 H.test("step 1: each box writes only its own key; step 2 hide when idle; step 3 the scale", function()
 	local w, ns, db = NewOpen()
 	Next(w)
-	H.eq(Parts(w).counter:GetText(), "Step 1 of 6")
+	H.eq(Parts(w).counter:GetText(), "Step 1 of 7")
 	H.eq(#Rows(w), 0, "no choice rows")
 	H.eq(Checked(w), "Experience bar,Target power,Your debuffs on the target", "a new install has all three")
 	local KEYS = { "showXP", "showTargetPower", "showTargetDebuffs" }
@@ -436,7 +442,7 @@ H.test("step 1: each box writes only its own key; step 2 hide when idle; step 3 
 	H.eq(Checked(w), "Experience bar,Target power,Your debuffs on the target")
 	H.eq(ModuleOn(ns, "targetdebuffs"), true)
 	Next(w)
-	H.eq(Parts(w).counter:GetText(), "Step 2 of 6")
+	H.eq(Parts(w).counter:GetText(), "Step 2 of 7")
 	Pick(w, "Always visible")
 	H.eq(db.hideWhenIdle, false)
 	Next(w)
@@ -445,12 +451,12 @@ H.test("step 1: each box writes only its own key; step 2 hide when idle; step 3 
 	Pick(w, "Large")
 	H.eq(db.scale, 1.2)
 	H.eq(#Rows(w), 3, "no Keep your own on a first run")
-	Next(w); Next(w); Next(w); Next(w)
-	H.eq(Visible(Parts(w).body), ns.TEXT[0]["setup.p7.bodyAlways"], "page 8 follows step 2")
+	Next(w); Next(w); Next(w); Next(w); Next(w)
+	H.eq(Visible(Parts(w).body), ns.TEXT[0]["setup.p7.bodyAlways"], "page 9 follows step 2")
 end)
 
 H.test("step 1: without the game's debuff row, its box and its name go", function()
-	local w = H.world()                  -- no AuraContainer on this client
+	local w = NewWorld()                  -- no AuraContainer on this client
 	local ns = w:loadAddon()
 	w:runTimers()
 	H.eq(ns.TargetDebuffRow(), false, "the module found no row")
@@ -502,7 +508,7 @@ H.test("step 1: on a new install, Next and Skip setup write nothing new", functi
 	local before = {}
 	for k, v in pairs(db) do before[k] = v end
 	Next(w); Next(w)
-	H.eq(Parts(w).counter:GetText(), "Step 2 of 6")
+	H.eq(Parts(w).counter:GetText(), "Step 2 of 7")
 	for k, v in pairs(before) do
 		if k ~= "locked" then H.eq(db[k], v, "Next leaves " .. k) end
 	end
@@ -597,7 +603,7 @@ H.test("step 3: Move the HUD unlocks and says Lock; a second click, Next or Back
 	local w, _, db = NewOpen()
 	for _ = 1, 3 do Next(w) end
 	local p = Parts(w)
-	H.eq(p.counter:GetText(), "Step 3 of 6")
+	H.eq(p.counter:GetText(), "Step 3 of 7")
 	H.eq(#Rows(w), 3, "the three sizes, no place choice")
 	H.eq(ButtonText(w, "moveHud"), "Move the HUD")
 	H.ok(Y(p.moveHud) < Y(Rows(w)[3].row) and Y(p.moveHud) > Y(p.under), "on its own row under the choices")
@@ -749,7 +755,7 @@ H.test("a fight hides setup and locks the HUD; setup comes back on the same page
 	w.combat = false
 	w:fire("PLAYER_REGEN_ENABLED")
 	H.ok(IsOpen(w), "back")
-	H.eq(Parts(w).counter:GetText(), "Step 3 of 6", "same page")
+	H.eq(Parts(w).counter:GetText(), "Step 3 of 7", "same page")
 	H.eq(ButtonText(w, "moveHud"), "Move the HUD", "locked")
 	H.eq(ns.setupOpen, true)
 end)
@@ -780,7 +786,7 @@ H.test("only Escape is a key: Enter and the other keys go on to the game", funct
 	for _, key in ipairs({ "ENTER", "W", "SLASH" }) do
 		Key(w, key)
 		H.ok(win:GetPropagateKeyboardInput(), key .. " goes on to the game")
-		H.eq(Parts(w).counter:GetText(), "Step 1 of 6", key .. " changes no page")
+		H.eq(Parts(w).counter:GetText(), "Step 1 of 7", key .. " changes no page")
 		H.ok(IsOpen(w), key .. " does not close setup")
 	end
 	for _ = 1, 6 do Next(w) end
@@ -803,94 +809,385 @@ H.test("only Escape is a key: Enter and the other keys go on to the game", funct
 end)
 
 --------------------------------------------------------------------------------
--- Page 8: alerts and the bars notice
+-- Step 7: the page for your class (TICK-0180)
 --------------------------------------------------------------------------------
 
-local function Page8(w)
+-- Next from page 1 to step 7 (the default Mage has it).
+local function ClassPage(w)
 	for _ = 1, 7 do Next(w) end
+	return Visible(Parts(w).alerts)
+end
+
+-- Page 9: its picks block and its bars notice.
+local function Page9(w)
+	for _ = 1, 8 do Next(w) end
 	return Visible(Parts(w).alerts), Visible(Parts(w).bars)
 end
 
-H.test("page 8: a Mage who knows no alert spell gets the one line", function()
-	local w = NewOpen()
-	local alerts = Page8(w)
-	H.eq(alerts, w.ns.TEXT[0]["setup.p7.noAlerts"]:format("Mage"), "no /hud test line without an alert on")
+-- Step 7's shown small boxes: { name, checked, enabled, note, row }.
+local function Minis(w)
+	local out = {}
+	for _, r in ipairs(Parts(w).minis) do
+		if r:IsShown() then
+			out[#out + 1] = { name = r.name:GetText(), checked = r.check:GetChecked(),
+				enabled = r.check:IsEnabled(), note = Visible(r.note), row = r }
+		end
+	end
+	return out
+end
+
+local function MiniNames(w)
+	local out = {}
+	for i, b in ipairs(Minis(w)) do out[i] = b.name end
+	return table.concat(out, ",")
+end
+
+-- Click the small box of this name: on the box, or on its check box.
+local function TickMini(w, name, onCheck)
+	for _, b in ipairs(Minis(w)) do
+		if b.name == name then
+			w:Run(onCheck and b.row.check or b.row, "OnClick")
+			return
+		end
+	end
+	error("no small box " .. name)
+end
+
+-- A world with these spells known, the class file changed by edit(profile),
+-- and setup open on page 1. before(ns), when set, runs before setup opens.
+local function ClassWorld(known, edit, before)
+	local w = GameRow(NewWorld())
+	if known then Know(w, known) end
+	local ns = w:loadAddon()
+	if edit then edit(ns.ClassProfiles().MAGE) end
+	if before then before(ns) end
+	w:runTimers()
+	return w, ns, w.env.HUDiniDB
+end
+
+local SOUND = "Sound when a buff is missing"
+
+H.test("step 7: the known bells in class file order, then the buff sound, in two columns", function()
+	local w, ns = ClassWorld({ "Evocation", "Cold Snap" })
+	ClassPage(w)
+	local T, p = ns.TEXT[0], Parts(w)
+	H.eq(p.counter:GetText(), "Step 7 of 7")
+	H.eq(Visible(p.question), T["setup.class.question"]:format("Mage"))
+	H.eq(Visible(p.under), T["setup.class.under"])
+	H.eq(Visible(p.changes), T["setup.class.changes"])
+	H.eq(MiniNames(w), "Bell: Evocation,Bell: Cold Snap," .. SOUND, "Ice Block is not known: no box")
+	local m = Minis(w)
+	H.eq(select(4, m[1].row:GetPoint()), select(4, m[3].row:GetPoint()), "the third box starts the second row")
+	H.ok(select(4, m[2].row:GetPoint()) > select(4, m[1].row:GetPoint()), "the second box is right of the first")
+	H.ok(select(5, m[3].row:GetPoint()) < select(5, m[1].row:GetPoint()), "the third box is under the first")
+	H.ok(Y(p.question) > select(5, m[1].row:GetPoint()), "the boxes are under the question")
+	H.ok(select(5, m[3].row:GetPoint()) > Y(p.under), "and over the line under them")
+	for _, b in ipairs(m) do H.eq(b.note, nil, b.name .. ": no note") end
+	H.eq(#Rows(w), 0, "no choice rows")
+	H.eq(ButtonText(w, "main"), "Next")
+	Press(w, "left1")
+	H.eq(p.counter:GetText(), "Step 6 of 7", "Back goes to step 6")
 end)
 
-H.test("page 8: the known spells' lines, then More alerts", function()
-	local w = H.world()
-	Know(w, { "Counterspell", "Mana Shield" })
-	w:loadAddon()
+H.test("step 7: at most four bells, those that start on first, then the others, each known", function()
+	local w = ClassWorld({ "Evocation", "Ice Block", "Blink", "Frost Nova", "Polymorph" }, function(profile)
+		profile.readyAlert = { "Evocation", "Ice Block", "Cold Snap", "Blink", "Frost Nova", "Polymorph" }
+		profile.readyAlertOn = { "Frost Nova", "Ice Block", "Cold Snap" }
+	end)
+	ClassPage(w)
+	H.eq(MiniNames(w), "Bell: Ice Block,Bell: Frost Nova,Bell: Evocation,Bell: Blink," .. SOUND)
+end)
+
+H.test("step 7: no readyAlert gives no bell box, no keepUp no sound box; with nothing, setup skips it", function()
+	local w = ClassWorld({ "Evocation" }, function(profile) profile.readyAlert = nil end)
+	ClassPage(w)
+	H.eq(MiniNames(w), SOUND, "no readyAlert: no bell")
+	w = ClassWorld({ "Evocation" }, function(profile) profile.keepUp = nil end)
+	ClassPage(w)
+	H.eq(MiniNames(w), "Bell: Evocation", "no keepUp: no sound box")
+	-- No box and no Already on line: six steps, and step 6 leads to page 9.
+	w = ClassWorld({ "Counterspell" }, function(profile)
+		profile.readyAlert, profile.keepUp = nil, nil
+		profile.interrupt, profile.dispel, profile.purge = nil, nil, nil
+	end)
+	for _ = 1, 6 do Next(w) end
+	H.eq(Parts(w).counter:GetText(), "Step 6 of 6")
+	Next(w)
+	H.eq(ButtonText(w, "main"), "Finish", "past step 7 to page 9")
+	H.eq(Visible(Parts(w).alerts), nil, "page 9: no picks")
+	Press(w, "left1")
+	H.eq(Parts(w).counter:GetText(), "Step 6 of 6", "Back goes past it too")
+end)
+
+-- A Priest has no keepUp; its sound is for a tracked buff (Inner Fire), so
+-- keepUpSoundOn alone gives the sound box.
+H.test("step 7: keepUpSoundOn with no keepUp gives the sound box", function()
+	local w = ClassWorld({ "Evocation" }, function(profile)
+		profile.keepUp, profile.keepUpSoundOn = nil, true
+	end)
+	ClassPage(w)
+	H.eq(MiniNames(w), "Bell: Evocation," .. SOUND, "the sound box")
+	w = ClassWorld({ "Evocation" }, function(profile)
+		profile.keepUp, profile.keepUpSoundOn = nil, false
+	end)
+	ClassPage(w)
+	H.eq(MiniNames(w), "Bell: Evocation", "keepUpSoundOn false: no sound box")
+end)
+
+-- TICK-0182: one box for each missing item row whose spell you know.
+local GEM = "Missing item: Mana Agate"
+
+-- ClassWorld, with the game naming the gem.
+local function ItemWorld(known)
+	local w = GameRow(NewWorld())
+	Know(w, known)
+	w.env.C_Item.GetItemNameByID = function(id) if id == 5514 then return "Mana Agate" end end
+	local ns = w:loadAddon()
 	w:runTimers()
-	local alerts = Page8(w)
-	local T = w.ns.TEXT[0]
-	H.eq(alerts, table.concat({
-		T["setup.p7.alerts"]:format("Mage"),
-		T["setup.p7.interrupt"]:format("Counterspell"),
-		T["setup.p7.keepUp"]:format("Mana Shield"),
-		T["setup.p7.more"],
+	return w, ns, w.env.HUDiniDB
+end
+
+H.test("step 7: a known missing item gives a box after the sound box, named as the game names it", function()
+	local w = ItemWorld({ "Evocation", "Conjure Mana Gem" })
+	ClassPage(w)
+	H.eq(MiniNames(w), "Bell: Evocation," .. SOUND .. "," .. GEM)
+	w = ItemWorld({ "Evocation" })
+	ClassPage(w)
+	H.eq(MiniNames(w), "Bell: Evocation," .. SOUND, "the spell not known: no box")
+	-- The game has not loaded the item yet: the spell's name.
+	w = ClassWorld({ "Conjure Mana Gem" })
+	ClassPage(w)
+	H.eq(MiniNames(w), SOUND .. ",Missing item: Conjure Mana Gem", "no item name yet")
+end)
+
+H.test("step 7: the item box shows the row's choice, a click turns it, page 9 lists it", function()
+	local w, ns, db = ItemWorld({ "Conjure Mana Gem" })
+	local T = ns.TEXT[0]
+	ClassPage(w)
+	H.eq(Minis(w)[2].checked, true, "on from the class file")
+	H.eq(Minis(w)[2].enabled, true, "the health bar is on")
+	Next(w)
+	H.eq(Visible(Parts(w).alerts), table.concat({
+		T["setup.p7.classPicks"]:format("Mage"),
+		T["setup.p7.sound"]:format(T["opt.sound.off"]),
+		T["setup.p7.items"]:format("Mana Agate"),
 		T["setup.p7.test"],
 	}, "\n"))
+	Press(w, "left1")
+	TickMini(w, GEM)
+	H.eq(ns.GetMissingItem("manaGem"), false, "the click turns it off")
+	H.eq(db.classes.MAGE.missingItem.manaGem, false, "saved for the Mage")
+	Next(w)
+	H.eq(Visible(Parts(w).alerts), table.concat({
+		T["setup.p7.classPicks"]:format("Mage"),
+		T["setup.p7.sound"]:format(T["opt.sound.off"]),
+		T["setup.p7.test"],
+	}, "\n"), "nothing checked: no items line")
+	db.showHealth = false
+	Press(w, "left1")
+	H.eq(Minis(w)[2].enabled, false, "gray with no health bar")
 end)
 
-H.test("page 8: every alert spell known gives no More alerts; a row turned off drops its line", function()
-	local w = H.world()
+H.test("step 7 with only Already on lines: page 9 gives the /hud test line alone", function()
+	local w, ns = ClassWorld({ "Counterspell" }, function(profile) profile.readyAlert, profile.keepUp = nil, nil end)
+	local T = ns.TEXT[0]
+	H.eq(ClassPage(w), table.concat({ T["setup.class.on"], T["setup.class.interrupt"]:format("Counterspell"),
+		T["setup.class.more"] }, "\n"))
+	H.eq(MiniNames(w), "", "no box")
+	Next(w)
+	H.eq(Visible(Parts(w).alerts), T["setup.p7.test"])
+end)
+
+H.test("step 7: a KnownSpell that says false is not known", function()
+	local w = ClassWorld({ "Evocation" }, nil, function(ns)
+		local known = ns.KnownSpell
+		ns.KnownSpell = function(name) return known(name) or false end
+	end)
+	ClassPage(w)
+	H.eq(MiniNames(w), "Bell: Evocation," .. SOUND)
+end)
+
+H.test("step 7: each box shows its value now, and Next writes nothing", function()
+	local w, ns, db = ClassWorld({ "Evocation", "Cold Snap" }, nil, function(ns)
+		ns.SetReadyAlert("Cold Snap", true)
+	end)
+	local before = H.dump and H.dump(db.classes) or nil
+	ClassPage(w)
+	local m = Minis(w)
+	H.eq(m[1].checked, false, "Evocation as saved: off")
+	H.eq(m[2].checked, true, "Cold Snap as saved: on")
+	H.eq(m[3].checked, false, "the sound as saved: off")
+	Next(w)
+	H.eq(ns.GetReadyAlert("Evocation"), false)
+	H.eq(ns.GetReadyAlert("Cold Snap"), true)
+	H.eq(ns.GetKeepUpSoundChoice(), "off")
+	H.eq(db.classes.MAGE.keepUpSound, nil, "Next writes no sound")
+	H.eq(db.classes.MAGE.readyAlerts.Evocation, nil, "Next writes no bell")
+	if before then H.eq(H.dump(db.classes), before) end
+end)
+
+H.test("step 7: a bell click turns the bell only; the timer bar stays; the Options row repaints", function()
+	local w, ns = ClassWorld({ "Evocation" }, nil, function(ns) ns.SetTimerBar("Evocation", true) end)
+	local notified = {}
+	w.env.Settings.GetSetting = function(variable)
+		return { NotifyUpdate = function() notified[#notified + 1] = variable end }
+	end
+	w.env.SettingsPanel:Show()
+	ClassPage(w)
+	notified = {}
+	TickMini(w, "Bell: Evocation")
+	H.eq(ns.GetReadyAlert("Evocation"), true)
+	H.eq(ns.GetTimerBar("Evocation"), true, "the bar stays")
+	H.eq(table.concat(notified, ","), "HUDini_class_cooldown_Evocation")
+	H.eq(Minis(w)[1].checked, true)
+	TickMini(w, "Bell: Evocation", true)
+	H.eq(ns.GetReadyAlert("Evocation"), false, "on the check box too")
+	H.eq(ns.GetTimerBar("Evocation"), true, "the bar still stays")
+	H.eq(Minis(w)[1].checked, false)
+end)
+
+H.test("step 7: the sound box puts back the last sound, else the default", function()
+	local w, ns = ClassWorld({ "Evocation" }, nil, function(ns) ns.SetKeepUpSound("alarmClock") end)
+	ClassPage(w)
+	H.eq(Minis(w)[2].checked, true, "on at open")
+	TickMini(w, SOUND)
+	H.eq(ns.GetKeepUpSoundChoice(), "off")
+	TickMini(w, SOUND)
+	H.eq(ns.GetKeepUpSoundChoice(), "alarmClock", "the sound on at open")
+	ns.SetKeepUpSound("coins")
+	TickMini(w, SOUND)
+	TickMini(w, SOUND)
+	H.eq(ns.GetKeepUpSoundChoice(), "coins", "the sound on before the uncheck")
+	local w2, ns2 = ClassWorld({ "Evocation" })
+	ClassPage(w2)
+	TickMini(w2, SOUND)
+	H.eq(ns2.GetKeepUpSoundChoice(), ns2.MISSING_SOUND_DEFAULT, "never picked: the default")
+end)
+
+H.test("step 7: a gray box keeps its check and takes no click", function()
+	local w, ns, db = ClassWorld({ "Evocation" }, nil, function(ns) ns.SetKeepUpSound("alarmClock") end)
+	db.warnKeepUp, db.warnOwnBuff = false, false
+	ClassPage(w)
+	local sound = Minis(w)[2]
+	H.eq(sound.enabled, false, "gray as its Options row: both buff reminders off")
+	H.eq(sound.checked, true, "it still shows its check")
+	H.eq(sound.note, nil, "no note")
+	TickMini(w, SOUND)
+	TickMini(w, SOUND, true)
+	H.eq(ns.GetKeepUpSoundChoice(), "alarmClock", "no click")
+	db.warnKeepUp = true
+	Press(w, "left1"); Next(w)
+	H.eq(Minis(w)[2].enabled, true, "a buff reminder on: it takes a click")
+end)
+
+H.test("step 7: a Mage who knows no alert spell gets the More line alone", function()
+	local w = NewOpen()
+	H.eq(ClassPage(w), w.ns.TEXT[0]["setup.class.more"])
+end)
+
+H.test("step 7: Already on lists the known spells' lines, then More", function()
+	local w = ClassWorld({ "Counterspell", "Mana Shield" })
+	local T = w.ns.TEXT[0]
+	H.eq(ClassPage(w), table.concat({
+		T["setup.class.on"],
+		T["setup.class.interrupt"]:format("Counterspell"),
+		T["setup.class.keepUp"]:format("Mana Shield"),
+		T["setup.class.more"],
+	}, "\n"))
+	local p = Parts(w)
+	H.ok(select(5, Minis(w)[1].row:GetPoint()) > Y(p.alerts), "under the boxes")
+	H.ok(Y(p.alerts) > Y(p.under), "over the line under them")
+end)
+
+H.test("step 7: every alert spell known gives no More; a row turned off drops its line", function()
+	local w = NewWorld()
 	Know(w, { "Counterspell", "Remove Lesser Curse", "Spellsteal", "Ice Barrier", "Mana Shield" })
 	local ns = w:loadAddon()
 	w:runTimers()
 	w.env.HUDiniDB.warnKeepUp = false
-	local alerts = Page8(w)
 	local T = ns.TEXT[0]
-	H.eq(alerts, table.concat({
-		T["setup.p7.alerts"]:format("Mage"),
-		T["setup.p7.interrupt"]:format("Counterspell"),
-		T["setup.p7.dispel"]:format("Remove Lesser Curse"),
-		T["setup.p7.purge"]:format("Spellsteal"),
-		T["setup.p7.test"],
+	H.eq(ClassPage(w), table.concat({
+		T["setup.class.on"],
+		T["setup.class.interrupt"]:format("Counterspell"),
+		T["setup.class.dispel"]:format("Remove Lesser Curse"),
+		T["setup.class.purge"]:format("Spellsteal"),
 	}, "\n"))
 	H.eq(select(2, ns.SetupAlertLines()), false, "nothing left to learn")
 end)
 
-H.test("page 8: the interrupt line names every known interrupt", function()
-	local w = H.world()
+H.test("page 9: the picks of step 7, then /hud test", function()
+	local w, ns = ClassWorld({ "Evocation", "Cold Snap" }, nil, function(ns) ns.SetKeepUpSound("alarmClock") end)
+	local T = ns.TEXT[0]
+	ClassPage(w)
+	TickMini(w, "Bell: Evocation")
+	TickMini(w, "Bell: Cold Snap")
+	Next(w)
+	H.eq(Visible(Parts(w).alerts), table.concat({
+		T["setup.p7.classPicks"]:format("Mage"),
+		T["setup.p7.bells"]:format("Evocation, Cold Snap"),
+		T["setup.p7.sound"]:format(T["sound.alarmClock"]),
+		T["setup.p7.test"],
+	}, "\n"))
+	Press(w, "left1")
+	TickMini(w, "Bell: Evocation")
+	TickMini(w, "Bell: Cold Snap")
+	TickMini(w, SOUND)
+	Next(w)
+	H.eq(Visible(Parts(w).alerts), table.concat({
+		T["setup.p7.classPicks"]:format("Mage"),
+		T["setup.p7.noBells"],
+		T["setup.p7.sound"]:format(T["opt.sound.off"]),
+		T["setup.p7.test"],
+	}, "\n"))
+	-- No known bell: no bells line.
+	local w2, ns2 = ClassWorld()
+	H.eq((Page9(w2)), table.concat({
+		T["setup.p7.classPicks"]:format("Mage"),
+		T["setup.p7.sound"]:format(T["opt.sound.off"]),
+		T["setup.p7.test"],
+	}, "\n"))
+end)
+
+H.test("step 7: the interrupt line names every known interrupt", function()
+	local w = NewWorld()
 	Know(w, { "Pummel", "Shield Bash" })
 	local ns = w:loadAddon()
 	ns.ClassValue = function(key) if key == "interrupt" then return { "Pummel", "Shield Bash" } end end
 	local lines, unknown = ns.SetupAlertLines()
-	H.eq(lines[1], ns.TEXT[0]["setup.p7.interrupt"]:format("Pummel, Shield Bash"))
+	H.eq(lines[1], ns.TEXT[0]["setup.class.interrupt"]:format("Pummel, Shield Bash"))
 	H.eq(unknown, false)
 end)
 
-H.test("page 8: dispel and keep-up name the first known spell only", function()
-	local w = H.world()
+H.test("step 7: dispel and keep-up name the first known spell only", function()
+	local w = NewWorld()
 	Know(w, { "Ice Barrier", "Mana Shield", "Cure", "Purify" })
 	local ns = w:loadAddon()
 	local lines = ns.SetupAlertLines()
-	H.eq(lines[#lines], ns.TEXT[0]["setup.p7.keepUp"]:format("Ice Barrier"), "keep-up: the Mage's first")
+	H.eq(lines[#lines], ns.TEXT[0]["setup.class.keepUp"]:format("Ice Barrier"), "keep-up: the Mage's first")
 	ns.ClassValue = function(key) if key == "dispel" then return { Poison = "Purify", Magic = "Cure" } end end
 	lines = ns.SetupAlertLines()
-	H.eq(lines[1], ns.TEXT[0]["setup.p7.dispel"]:format("Cure"), "dispel: by type, Magic first")
+	H.eq(lines[1], ns.TEXT[0]["setup.class.dispel"]:format("Cure"), "dispel: by type, Magic first")
 	H.eq(#lines, 1)
 end)
 
-H.test("page 8: a spell saved by ID shows its name", function()
-	local w = H.world()
+H.test("step 7: a spell saved by ID shows its name", function()
+	local w = NewWorld()
 	Know(w, { "Kick" })
 	local ns = w:loadAddon()
 	local id = w.env.C_Spell.GetSpellInfo("Kick").spellID
 	ns.ClassValue = function(key) if key == "interrupt" then return id end end
-	H.eq(ns.SetupAlertLines()[1], ns.TEXT[0]["setup.p7.interrupt"]:format("Kick"))
+	H.eq(ns.SetupAlertLines()[1], ns.TEXT[0]["setup.class.interrupt"]:format("Kick"))
 end)
 
-H.test("page 8: a class with no alert spells says nothing about alerts", function()
+H.test("step 7: a class with no alert spells says nothing about alerts", function()
 	local w, ns = NewOpen()
 	ns.ClassValue = function() return nil end
-	local alerts = Page8(w)
+	local alerts = ClassPage(w)
 	H.eq(alerts, nil)
 end)
 
-H.test("page 8: the bars notice names the shown bars 4-8 that hold an action, in bar row mode", function()
-	local w = H.world()
+H.test("page 9: the bars notice names the shown bars 4-8 that hold an action, in bar row mode", function()
+	local w = NewWorld()
 	w:Frame("MainMenuBar")            -- Bar 1, read: never named
 	w:Frame("MultiBarBottomLeft")     -- Bar 2, read: never named
 	w:Frame("MultiBarBottomRight")    -- Bar 3, read: never named
@@ -903,7 +1200,7 @@ H.test("page 8: the bars notice names the shown bars 4-8 that hold an action, in
 	end
 	local ns = w:loadAddon()
 	w:runTimers()
-	local _, bars = Page8(w)
+	local _, bars = Page9(w)
 	H.eq(bars, ns.TEXT[0]["setup.p7.bars"]:format("Action Bars 5 and 6"))
 	w.env.MultiBarRight:Show()
 	H.eq(table.concat(ns.SetupUnreadBars(), ","), "4,5,6")
@@ -911,16 +1208,16 @@ H.test("page 8: the bars notice names the shown bars 4-8 that hold an action, in
 	H.eq(#ns.SetupUnreadBars(), 0, "Pack and wrap reads them")
 end)
 
-H.test("page 8: one bar is named alone, and no bar gives no notice", function()
-	local w = H.world()
+H.test("page 9: one bar is named alone, and no bar gives no notice", function()
+	local w = NewWorld()
 	w:Frame("MultiBar7")
 	w.env.GetActionInfo = function(slot) if slot == 170 then return "spell", 100 end end
 	w:loadAddon()
 	w:runTimers()
-	local _, bars = Page8(w)
+	local _, bars = Page9(w)
 	H.eq(bars, w.ns.TEXT[0]["setup.p7.bars"]:format("Action Bar 8"))
 	local w2 = NewOpen()
-	local _, none = Page8(w2)
+	local _, none = Page9(w2)
 	H.eq(none, nil)
 end)
 
@@ -929,7 +1226,7 @@ end)
 --------------------------------------------------------------------------------
 
 H.test("each setup and About text that follows the level has a level 1 and a level 2 text", function()
-	local w = H.world()
+	local w = NewWorld()
 	local ns = w:loadAddon()
 	local T = ns.TEXT
 	-- The About host line (TICK-0083): the copy of D-029 (TICK-0134) gives
@@ -943,7 +1240,8 @@ H.test("each setup and About text that follows the level has a level 1 and a lev
 			"setup.p7.bodyAlways", "setup.p7.last", "setup.hud.essentials", "setup.s2.intro",
 			"setup.hud.xp.line", "setup.hud.targetPower.line", "setup.hud.debuffs.line",
 			"setup.size.intro", "setup.feed.intro", "setup.s5.intro", "setup.s6.intro",
-			"setup.s6.under", "setup.s6.lesson", "setup.s5.lesson" }) do
+			"setup.s6.under", "setup.s6.lesson", "setup.s5.lesson", "setup.class.intro",
+			"setup.class.under" }) do
 		H.ok(T[0][key], key .. " at level 0")
 		H.ok(T[1][key] and T[1][key] ~= T[0][key], key .. " at level 1")
 		H.ok(T[2][key] and T[2][key] ~= T[1][key], key .. " at level 2")
@@ -966,7 +1264,7 @@ H.test("each step shows its intro between the step counter and the question, at 
 		"setup.s5.intro", "setup.s6.intro" }
 	for n = 1, 6 do
 		Next(w)
-		H.eq(Parts(w).counter:GetText(), "Step " .. n .. " of 6")
+		H.eq(Parts(w).counter:GetText(), "Step " .. n .. " of 7")
 		local p = Parts(w)
 		H.eq(Visible(p.intro), T[2][INTRO[n]], "step " .. n .. " at level 2")
 		H.ok(Y(p.intro) > Y(p.question), "step " .. n .. ": the intro is above the question")
@@ -976,8 +1274,11 @@ H.test("each step shows its intro between the step counter and the question, at 
 	Press(w, "left1") -- Back to step 5: the repaint reads the level now
 	H.eq(Visible(Parts(w).intro), T[0]["setup.s5.intro"], "level 0 after the level changes")
 	Next(w); Next(w)
+	H.eq(Visible(Parts(w).intro), T[0]["setup.class.intro"]:format("Mage"), "step 7 names the class")
+	H.ok(Y(Parts(w).intro) > Y(Parts(w).question), "step 7: the intro is above the question")
+	Next(w)
 	H.eq(ButtonText(w, "main"), "Finish")
-	H.eq(Visible(Parts(w).intro), nil, "page 8 has no intro")
+	H.eq(Visible(Parts(w).intro), nil, "page 9 has no intro")
 end)
 
 H.test("every step gives every choice a line", function()
@@ -1021,7 +1322,7 @@ H.test("the setup window is 600 px wide", function()
 end)
 
 H.test("every setup.* key Setup.lua reads by a whole name has a level 0 text", function()
-	local w = H.world()
+	local w = NewWorld()
 	local ns = w:loadAddon()
 	local src = H.readFile("Setup.lua")
 	local n = 0
@@ -1070,7 +1371,7 @@ H.test("a drag on Step 3 moves only setup; the place holds until a reload", func
 	end
 	H.eq(ns.HUDini.mover:IsShown(), box, "the Move the HUD box is as it was")
 	H.eq(db.locked, false, "still unlocked")
-	H.eq(Parts(w).counter:GetText(), "Step 3 of 6")
+	H.eq(Parts(w).counter:GetText(), "Step 3 of 7")
 	Escape(w)
 	H.ok(not IsOpen(w), "closed")
 	w:slash("/hud setup")
@@ -1122,7 +1423,7 @@ end)
 -- A new install with Action Bar 1's end art, the bag bar and the menu
 -- buttons, logged in, setup open on step 6. The mouse is over neither bar.
 local function QuietOpen(layoutMode)
-	local w = H.world()
+	local w = NewWorld()
 	local bar = w:Frame("MainActionBar", nil, { protected = true })
 	bar.EndCaps = w:Frame(nil, bar)
 	local bags, menu = w:Frame("BagsBar"), w:Frame("MicroMenuContainer")
@@ -1141,7 +1442,7 @@ end
 
 H.test("step 6: Yes fades the two bars at once and No brings them back; the gryphons stay as they are", function()
 	local w, ns, db, f = QuietOpen()
-	H.eq(Parts(w).counter:GetText(), "Step 6 of 6")
+	H.eq(Parts(w).counter:GetText(), "Step 6 of 7")
 	H.eq(Visible(Parts(w).question), ns.TEXT[0]["setup.s6.question"])
 	H.eq(Visible(Parts(w).changes), ns.TEXT[0]["setup.s6.changes"])
 	H.eq(Picked(w), "Keep them visible", "No is the default")
@@ -1155,7 +1456,9 @@ H.test("step 6: Yes fades the two bars at once and No brings them back; the gryp
 	H.eq(Alphas(f), "1 1 1", "both come back at once")
 	H.eq(#w:takeBlocked(), 0, "no blocked call")
 	Next(w)
-	H.eq(ButtonText(w, "main"), "Finish", "the end page follows step 6")
+	H.eq(Parts(w).counter:GetText(), "Step 7 of 7", "the page for your class follows step 6")
+	Next(w)
+	H.eq(ButtonText(w, "main"), "Finish", "the end page follows step 7")
 end)
 
 H.test("step 6: in Row mode bar the lesson shows at the level now, after the line under the choices and before Changes", function()
@@ -1227,7 +1530,7 @@ end
 H.test("step 4: each choice writes the three feed keys; the tools row shows only while the feed is on", function()
 	local w, ns, db = FeedOpen()
 	local p = Parts(w)
-	H.eq(p.counter:GetText(), "Step 4 of 6")
+	H.eq(p.counter:GetText(), "Step 4 of 7")
 	H.eq(Visible(p.question), ns.TEXT[0]["setup.feed.question"])
 	H.eq(Picked(w), "Events", "Events is the default")
 	H.eq(Visible(p.sizeLabel), "Size:")
@@ -1382,7 +1685,7 @@ H.test("step 4: the leveling hints add their two samples at once, and On takes t
 end)
 
 H.test("feed samples: each hint shows only while it is on, and the upgrade needs Loot", function()
-	local w = H.world()
+	local w = NewWorld()
 	w.env.HUDiniDB = { schema = 99, welcomeSeen = true, feedQuestProgress = true, feedUpgrade = false }
 	local ns = w:loadAddon()
 	w:runTimers()
@@ -1403,7 +1706,7 @@ H.test("feed samples: each hint shows only while it is on, and the upgrade needs
 end)
 
 H.test("step 4: a sample line follows the kind picks, and none shows with the feed off", function()
-	local w = H.world()
+	local w = NewWorld()
 	w.env.HUDiniDB = { schema = 99, welcomeSeen = true, feedMoney = false }
 	w:loadAddon()
 	w:runTimers()
@@ -1423,7 +1726,7 @@ H.test("step 5: the chat lesson shows only with the feed on", function()
 	local w, ns, db = NewOpen()
 	for _ = 1, 5 do Next(w) end
 	local p = Parts(w)
-	H.eq(p.counter:GetText(), "Step 5 of 6")
+	H.eq(p.counter:GetText(), "Step 5 of 7")
 	H.eq(Visible(p.lesson), ns.TEXT[0]["setup.s5.lesson"], "the feed on")
 	H.ok(Y(p.under) > Y(p.lesson) and Y(p.lesson) > Y(p.changes), "after the line under the choices, before Changes")
 	Press(w, "left1")
@@ -1433,7 +1736,7 @@ H.test("step 5: the chat lesson shows only with the feed on", function()
 end)
 
 H.test("step 4: picks while the feed is on add no sample lines, with stacking off too", function()
-	local w = H.world()
+	local w = NewWorld()
 	w.env.HUDiniDB = { schema = 99, welcomeSeen = true, feedStack = false }
 	w:loadAddon()
 	w:runTimers()
@@ -1443,4 +1746,22 @@ H.test("step 4: picks while the feed is on add no sample lines, with stacking of
 	Pick(w, "Events and hints")
 	Pick(w, "Events")
 	H.eq(Samples(w), 5, "no repeat: stacking off does not join a second set")
+end)
+
+H.test("the version shows on the title line on every page; unknown says unavailable", function()
+	local w, ns = NewOpen()
+	ns.VERSION = "0.31.0"
+	local seen = {}
+	for page = 1, 9 do
+		if page > 1 then Next(w) else Pick(w, Picked(w)) end
+		seen[page] = Visible(Parts(w).version)
+	end
+	for page = 1, 9 do H.eq(seen[page], "Version 0.31.0", "page " .. page) end
+	local _, to, rel = Parts(w).version:GetPoint(1)
+	H.eq(to, Parts(w).title, "on the title")
+	H.eq(rel, "BOTTOMRIGHT", "right of the title")
+	local w2, ns2 = NewOpen()
+	ns2.VERSION = "unknown"
+	Next(w2)
+	H.eq(Visible(Parts(w2).version), "Version unavailable")
 end)

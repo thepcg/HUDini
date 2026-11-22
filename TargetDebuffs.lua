@@ -28,9 +28,11 @@ local _, ns = ...
 	  row draws nothing and throws nothing, and /hud debug modules says so.
 	- It starts on and listening for every unit. It is switched off before
 	  its group goes in, then given its unit ("target", or "player") and
-	  switched on.
-	- SetUnit does nothing for the same unit, so a new target asks it to
-	  read again (UpdateAllAuras).
+	  switched on only while that unit exists.
+	- SetUnit does nothing for the same unit. So a new target switches it
+	  off, then on and asks it to read again (UpdateAllAuras). With no
+	  target it stays off: left on, it kept the last target's icons
+	  (TICK-0160). Off clears its icons.
 	- It is made, placed, shown and hidden only out of a fight: under a
 	  protected parent those calls are blocked in one, and a frame type
 	  this new may count as protected itself. Switching it on or off
@@ -38,7 +40,7 @@ local _, ns = ...
 
 	Each row is a child of the HUD's anchor, like the target bars, so it is
 	on screen whenever you have a target, even while the rest of the HUD
-	hides. With no target there is nothing to draw.
+	hides. With no target the row is off, so it draws nothing.
 
 	The row of debuffs on you is a child of the anchor too, not of the HUD's
 	body: the body hides and shows in a fight (hide when idle), and a
@@ -324,10 +326,24 @@ local function AuraRow(spec)
 		return true
 	end
 
-	-- Ask the container to read the target again: SetUnit alone does
-	-- nothing when only the unit behind "target" changed.
+	-- The unit is there to read. A pcall and Plain: an error or a secret
+	-- answer counts as no unit, so the row stays off.
+	local function HasUnit()
+		local ok, there = pcall(UnitExists, spec.unit)
+		return ok and ns.Plain(there) == true
+	end
+
+	-- Off first, then on and read again only while the unit is there
+	-- (TICK-0160). SetUnit alone does nothing when only the unit behind
+	-- "target" changed, and a row left on with no target kept the last
+	-- target's icons on screen. Off clears the icons, in a fight too.
 	local function Follow()
-		if r.row then Try(r.row, "UpdateAllAuras") end
+		if not r.row then return end
+		Try(r.row, "SetEnabled", false)
+		if Live(r) and HasUnit() then
+			Try(r.row, "SetEnabled", true)
+			Try(r.row, "UpdateAllAuras")
+		end
 	end
 
 	local function Start()
@@ -338,7 +354,6 @@ local function AuraRow(spec)
 		if not Build() then return end
 		r.hideWaiting = nil
 		Try(r.row, "SetUnit", spec.unit)
-		Try(r.row, "SetEnabled", Live(r))
 		if r.side then Try(r.row, "SetAlpha", body:GetAlpha()) end
 		if InCombatLockdown() then
 			r.waiting = true
@@ -347,7 +362,7 @@ local function AuraRow(spec)
 		end
 		-- This row takes a line, so the rows above it move up.
 		PlaceAll()
-		if Live(r) then Follow() end
+		Follow()
 	end
 
 	-- "player" never changes its unit: only the target needs this.

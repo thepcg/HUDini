@@ -176,6 +176,25 @@ local function Dropdown(category, key, label, tooltip, choices)
 		tooltip, choices)
 end
 
+-- The game's sounds HUDini offers (TICK-0167, D-043), as dropdown
+-- choices: Off first when withOff, then each sound by its name. The
+-- default gets "(default)". Read each time the menu opens.
+local function SoundChoices(withOff, default)
+	local out = {}
+	if withOff then out[1] = { "off", Text("opt.sound.off") } end
+	for _, key in ipairs(ns.AlertSounds and ns.AlertSounds() or {}) do
+		local label = Text("sound." .. key)
+		if key == default then label = label .. " " .. Text("setup.default") end
+		out[#out + 1] = { key, label }
+	end
+	return out
+end
+
+-- A pick plays its sound once, so the player hears it before a fight.
+local function Preview(key)
+	if key and key ~= "off" and ns.PlayAlertSound then ns.PlayAlertSound(key) end
+end
+
 -- A value the panel sees one way and HUDiniDB keeps another.
 --
 -- Neither default nor label is ever a function (TICK-0089). The game
@@ -270,6 +289,7 @@ local COLOR_LABEL = {
 	tapped = "opt.color.tapped",
 	interrupt = "opt.color.interrupt",
 	shielded = "opt.color.shielded",
+	timer = "opt.color.timer",
 }
 
 -- The button text of a fallback row: a square of the color, then the words.
@@ -280,14 +300,26 @@ local function PickText(key)
 		Byte(c[1]), Byte(c[2]), Byte(c[3]), Text("opt.color.pick"))
 end
 
+-- The bar colors, then the timer bar's (TICK-0158): its bars live in
+-- TimerBars.lua, so its setter also repaints them.
+local function ColorKeys()
+	local out = {}
+	for _, entry in ipairs(ns.COLOR_KEYS) do out[#out + 1] = entry end
+	if ns.defaults.colors.timer then out[#out + 1] = { key = "timer" } end
+	return out
+end
+
 local function RegisterColors(category)
-	for _, entry in ipairs(ns.COLOR_KEYS) do
+	for _, entry in ipairs(ColorKeys()) do
 		local key = entry.key
 		local d = ns.defaults.colors[key]
 		colorSettings[key] = Proxy(category, "color_" .. key, Settings.VarType.String, -- locale: skip a setting name
 			COLOR_LABEL[key] and Text(COLOR_LABEL[key]) or entry.label, CreateColor(d[1], d[2], d[3]):GenerateHexColor(),
 			function() return ns.ColorHex(key) end,
-			function(hex) ns.SetColorHex(key, hex) end,
+			function(hex)
+				ns.SetColorHex(key, hex)
+				if key == "timer" and ns.RefreshTimerBars then ns.RefreshTimerBars() end
+			end,
 			-- The bars repaint in the setter. A fallback row keeps its new
 			-- text for the next time the panel draws it (after Defaults).
 			function()
@@ -677,6 +709,40 @@ local function BuildBars(category, layout)
 	GreyUnless(Checkbox(category, "showTotems", Text("opt.showTotems"),
 		Text("opt.showTotems.tip")),
 		function() return ns.ClassToken() == "SHAMAN" end)
+	-- TICK-0158: the look of the cooldown timer bars. Which spells get one
+	-- is on the Your class page; no gray, as that choice is per class.
+	Dropdown(category, "timerBarTexture", Text("opt.timerBarTexture"),
+		Text("opt.timerBarTexture.tip"),
+		function()
+			-- Each strip shows the texture in the timer bar color picked now.
+			local c = ns.BarColor and ns.BarColor("timer") or { 0.30, 0.60, 1.00 }
+			local rgb = ("%d:%d:%d"):format(c[1] * 255, c[2] * 255, c[3] * 255)
+			local out = { { "hud", Text("opt.timerBarTexture.hud") } }
+			for _, e in ipairs(ns.BarTextureList()) do
+				local strip = ("|T%s:14:90:0:0:8:8:0:8:0:8:%s|t"):format(ns.TexturePathFor(e.key), rgb)
+				out[#out + 1] = { e.key, strip .. "  " .. e.label }
+			end
+			return out
+		end)
+	Dropdown(category, "timerBarTime", Text("opt.timerBarTime"), Text("opt.timerBarTime.tip"),
+		function() return {
+			{ "seconds", Text("opt.timerBarTime.seconds"), Text("opt.timerBarTime.seconds.tip") },
+			{ "percent", Text("opt.timerBarTime.percent"), Text("opt.timerBarTime.percent.tip") },
+		} end)
+	-- A new look reaches a timer bar that shows now, in a fight too: the
+	-- Apply that Changed queues restyles a bar only for a new texture, and
+	-- waits for the fight to end (TICK-0158 review).
+	for _, key in ipairs({ "timerBarTexture", "timerBarTime" }) do
+		Settings.SetOnValueChangedCallback("HUDini_" .. key, function()
+			if ns.RefreshTimerBars then ns.RefreshTimerBars() end
+		end)
+	end
+	-- TICK-0169: the timer bars have a place of their own, saved per
+	-- class; they move with the HUD lock (a second blue box). This puts
+	-- them back under the HUD. In a fight it does nothing (the tip says so).
+	Button(layout, Text("opt.timerBarPlace"), Text("opt.timerBarPlace.button"),
+		function() if ns.ResetTimerBarsPlace then ns.ResetTimerBarsPlace() end end,
+		Text("opt.timerBarPlace.tip"))
 end
 
 --------------------------------------------------------------------------------
@@ -716,6 +782,13 @@ local function BuildColors(category, layout)
 	Header(layout, Text("opt.head.targetCast"))
 	Swatch(category, layout, "interrupt", Text("opt.color.interrupt.tip"))
 	Swatch(category, layout, "shielded", Text("opt.color.shielded.tip"))
+
+	-- TICK-0158: a druid already has 15 rows above, so the timer bar's
+	-- color sits under Advanced.
+	if colorSettings.timer then
+		Advanced(layout)
+		Swatch(category, layout, "timer", Text("opt.color.timer.tip"))
+	end
 end
 
 --------------------------------------------------------------------------------
@@ -832,6 +905,27 @@ local function BuildYourClass(category, layout)
 	-- fallback. /hud buffs still lists them and forgets one.
 	Button(layout, Text("opt.trackedBuffs"), Text("opt.trackedBuffs.button"),
 		function() ns.BuffsCommand("clear", function() end) end, Text("opt.trackedBuffs.tip"))
+	-- A sound when either red icon left of the health bar turns on in a
+	-- fight: the personal buff (Lightning Shield) or the combat buff. Saved
+	-- per class (TICK-0163). Off, or the sound to play (TICK-0167): one
+	-- row, not a check box and a sound row, keeps the page inside 15 rows.
+	-- Gray unless one of the two icons can show. ns.GetKeepUpSoundChoice
+	-- reads an old save of true as the buff default.
+	local missingDefault = ns.MISSING_SOUND_DEFAULT
+	local sound = Proxy(category, "class_keepUpSound", Settings.VarType.String,
+		Text("opt.class.keepUpSound"), "off",
+		function()
+			local v = ns.GetKeepUpSoundChoice and ns.GetKeepUpSoundChoice()
+			return type(v) == "string" and v or "off"
+		end,
+		function(pick)
+			if ns.SetKeepUpSound and ns.SetKeepUpSound(pick) then Preview(pick) end
+		end)
+	GreyUnless(DropdownFor(category, sound, Text("opt.class.keepUpSound.tip"),
+		function() return SoundChoices(true, missingDefault) end),
+		function()
+			return HUDiniDB.showHealth and (HUDiniDB.warnOwnBuff or HUDiniDB.warnKeepUp) and true or false
+		end, "showHealth", "warnOwnBuff", "warnKeepUp")
 
 	Header(layout, Text("opt.head.resource"))
 	-- A new resource pick changes the stacks, and whether they mean anything.
@@ -848,6 +942,154 @@ local function BuildYourClass(category, layout)
 	GreyUnless(SliderFor(category, stacks,
 		Text("opt.class.resourceStacks.tip"), 1, 20, 1, Count),
 		function() return ns.ResourceStacks() ~= nil end, "class_resource")
+
+	-- Cooldowns (D-041): per spell, a bell when it is ready (TICK-0157), a
+	-- timer bar while it runs (TICK-0158), or both. One dropdown per spell,
+	-- not two check boxes. The label is the spell's own name.
+	local function Choices() return {
+		{ "off", Text("opt.class.cooldown.off") },
+		{ "bell", Text("opt.class.cooldown.bell"), Text("opt.class.cooldown.bell.tip") },
+		{ "bar", Text("opt.class.cooldown.bar"), Text("opt.class.cooldown.bar.tip") },
+		{ "both", Text("opt.class.cooldown.both"), Text("opt.class.cooldown.both.tip") },
+	} end
+	-- Each row's setting name is the spell's letters. Two names with the
+	-- same letters, or a name with none (a ruRU, koKR or zhCN client), get
+	-- a number from the name's bytes: the game throws on a name it already
+	-- has (TICK-0162 review).
+	local hasRow, usedName = {}, {}
+	local function SettingName(spell)
+		local base = "class_cooldown_" .. spell:gsub("[^%w]", "") -- locale: skip a setting name
+		if base ~= "class_cooldown_" and not usedName[base] then return base end
+		local h = 5381
+		for i = 1, #spell do h = (h * 33 + spell:byte(i)) % 4294967296 end
+		local name, n = base .. "_" .. h, 1
+		while usedName[name] do name, n = base .. "_" .. h .. "_" .. n, n + 1 end
+		return name
+	end
+	local function Row(spell, tooltip)
+		hasRow[spell] = true
+		local name = SettingName(spell)
+		usedName[name] = true
+		local setting = Proxy(category, name, Settings.VarType.String, spell, "off",
+			function()
+				local bell, bar = ns.GetReadyAlert(spell), ns.GetTimerBar(spell)
+				if bell and bar then return "both" end
+				return bell and "bell" or bar and "bar" or "off"
+			end,
+			function(pick)
+				ns.SetReadyAlert(spell, pick == "bell" or pick == "both")
+				ns.SetTimerBar(spell, pick == "bar" or pick == "both")
+			end)
+		return DropdownFor(category, setting, tooltip, Choices)
+	end
+
+	-- Under Advanced: the bell's sound (TICK-0167, D-043), one for every
+	-- spell of this class, so the bell is one sound to learn. A row per
+	-- spell would double the list. Never gray: any spell can have a bell.
+	Advanced(layout)
+	local readyDefault = ns.READY_SOUND_DEFAULT
+	local bell = Proxy(category, "class_readySound", Settings.VarType.String,
+		Text("opt.class.readySound"), readyDefault,
+		function() return ns.GetReadySound and ns.GetReadySound() or readyDefault end,
+		function(pick)
+			if ns.SetReadySound and ns.SetReadySound(pick) then Preview(pick) end
+		end)
+	DropdownFor(category, bell, Text("opt.class.readySound.tip"),
+		function() return SoundChoices(false, readyDefault) end)
+
+	-- Then the Cooldowns group (TICK-0201): a row for each spell you know,
+	-- the class file's first in its order, then every other spell you
+	-- learned with a cooldown (TICK-0162, D-042), A to Z. A spell you do
+	-- not know gets no row, unless you saved a bell or a bar for it, so you
+	-- can turn it off. A class file may name 13 spells (all races'
+	-- racials), and a gray row for each would bury the page; so the group
+	-- sits at the end, under Advanced, and the top of the page stays inside
+	-- 15 rows. The game's settings window only adds rows at the end, and
+	-- the book is read only out of a fight (at load it may not be read
+	-- yet), so the panel adds the rows of new spells each time it opens out
+	-- of a fight; those go at the end of the group. A row is never removed.
+	local function Known(spell)
+		return not ns.KnownSpell or ns.KnownSpell(spell) and true or false
+	end
+	-- The saved choice only, not a class default (TICK-0181): a default
+	-- bell for another race's racial gives no row.
+	local function SavedOn(spell)
+		local mine = HUDiniDB and ns.ClassDB and ns.ClassDB()
+		if type(mine) ~= "table" then return false end
+		return type(mine.readyAlerts) == "table" and mine.readyAlerts[spell] == true
+			or type(mine.timerBars) == "table" and mine.timerBars[spell] == true
+	end
+	-- Missing items (TICK-0182): a check box for each row of the class file
+	-- whose spell you know (make, or one of needs), or whose pick you saved;
+	-- the rule of the cooldown rows and of HUDini setup's boxes. They come
+	-- before the cooldown rows on the first open; a row for a spell learned
+	-- later goes at the end, under its own header when the last group is
+	-- not this one. The label is the item's name from the game, or its
+	-- spell's name while the game has not loaded the item. Gray without the
+	-- health bar: the icon sits by it. HUDini setup's boxes repaint these by
+	-- name ("class_item_" .. key).
+	local hasItemRow, lastGroup = {}, nil
+	local function SavedItem(key)
+		local mine = HUDiniDB and ns.ClassDB and ns.ClassDB()
+		return type(mine) == "table" and type(mine.missingItem) == "table" and mine.missingItem[key] ~= nil
+	end
+	local function ItemKnown(row)
+		if ns.MissingItemKnown then return ns.MissingItemKnown(row) ~= nil end
+		return Known(row.make or (type(row.needs) == "table" and row.needs[1]) or row.needs)
+	end
+	local function AddItemRows()
+		local add = {}
+		for _, row in ipairs(ns.MissingItemRows and ns.MissingItemRows() or {}) do
+			if not hasItemRow[row.key] and (ItemKnown(row) or SavedItem(row.key)) then add[#add + 1] = row end
+		end
+		if #add == 0 then return end
+		if lastGroup ~= "items" then
+			Header(layout, Text("opt.head.items"), Text("opt.head.items.tip"))
+			lastGroup = "items"
+		end
+		for _, row in ipairs(add) do
+			local key = row.key
+			hasItemRow[key] = true
+			local spell = row.make or (type(row.needs) == "table" and row.needs[1]) or row.needs
+			local label = ns.MissingItemName and ns.MissingItemName(row) or tostring(spell)
+			local setting = Proxy(category, "class_item_" .. key, Settings.VarType.Boolean, label, nil, -- locale: skip a setting name
+				function() return ns.GetMissingItem(key) end,
+				function(on) ns.SetMissingItem(key, on) end)
+			local tip = Text("opt.class.item.tip")
+			GreyUnless(Remember(Settings.CreateCheckbox(category, setting, tip), tip),
+				On("showHealth"), "showHealth")
+		end
+	end
+	function ns.AddMoreSpellRows()
+		if InCombatLockdown and InCombatLockdown() then return end
+		AddItemRows()
+		local all, count = {}, 0
+		if ns.ReadyAlertSpells then
+			all, count = ns.ReadyAlertSpells()
+			count = count or #all
+		end
+		local class, more, seen = {}, {}, {}
+		local function Take(list, spell, mustKnow)
+			if type(spell) ~= "string" or hasRow[spell] or seen[spell] then return end
+			if mustKnow and not Known(spell) and not SavedOn(spell) then return end
+			seen[spell], list[#list + 1] = true, spell
+		end
+		for i = 1, count do Take(class, all[i], true) end
+		-- The rest are spells you learned or saved on already.
+		for i = count + 1, #all do Take(more, all[i], false) end
+		for _, spell in ipairs(ns.TimerBarSpells and ns.TimerBarSpells() or {}) do
+			Take(more, spell, true)
+		end
+		if #class + #more == 0 then return end
+		table.sort(more)
+		if lastGroup ~= "cooldowns" then
+			Header(layout, Text("opt.head.cooldowns"), Text("opt.head.cooldowns.tip"))
+			lastGroup = "cooldowns"
+		end
+		for _, spell in ipairs(class) do Row(spell, Text("opt.class.cooldown.tip")) end
+		for _, spell in ipairs(more) do Row(spell, Text("opt.class.cooldown.tip")) end
+	end
+	ns.AddMoreSpellRows()
 end
 
 --------------------------------------------------------------------------------
@@ -1054,6 +1296,8 @@ function ns.BuildOptions()
 	-- visible even out of combat.
 	if SettingsPanel and SettingsPanel.HookScript then
 		SettingsPanel:HookScript("OnShow", function()
+			-- Spells learned since the last open get their rows (TICK-0162).
+			if ns.AddMoreSpellRows then ns.AddMoreSpellRows() end
 			ns.previewing = true
 			ns.HUDini:UpdateVisibility()
 		end)

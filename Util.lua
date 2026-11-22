@@ -123,3 +123,20 @@ function ns.LoadSession(field, New)
 	s.lastSeen = nil
 	return s
 end
+
+-- Play the first sound of the list that the game can play, and return its
+-- kit ID (nil when none played). PlaySound returns success true, or
+-- nothing at all for a kit this client's data does not have
+-- (SoundDocumentation.lua: MayReturnNothing), with no error. DK's test on
+-- WoW Forever: the cooldown alert kits 353392 and 353397 return nothing
+-- and play nothing, so a list ends with an old kit every client has.
+-- channel: the game's sound channel ("Master"), nil for its default.
+-- PlaySound also returns false with the sound turned off: then the next kit
+-- is tried and plays nothing too, which is harmless.
+function ns.PlaySoundFirst(kits, channel)
+	for _, kit in ipairs(kits) do
+		local ok, played = pcall(PlaySound, kit, channel)
+		if ok and played then return kit end
+	end
+	return nil
+end

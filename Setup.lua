@@ -4,8 +4,9 @@
 	HUDini setup (D-007, TICK-0042): page 1
 	says what HUDini is and asks the flair level, six steps set up the HUD
 	and the feed (TICK-0096: what the HUD shows, hide when idle, size and
-	place, the feed, the game's own frames, a quieter screen), and page 8
-	says what is on. Every pick writes its keys at once and the HUD under
+	place, the feed, the game's own frames, a quieter screen), step 7 gives
+	the alerts for your class (TICK-0180, D-047), and page 9 says what is
+	on. A class with nothing for step 7 skips it, and has six steps. Every pick writes its keys at once and the HUD under
 	the window shows the result. Each page has a default, so a player who
 	only clicks Next ends with the defaults.
 
@@ -36,7 +37,7 @@ local Text = ns.Text
 local WIDTH, PAD, GAP = 600, 20, 10
 local INNER = WIDTH - 2 * PAD
 local ICON = "Interface\\AddOns\\HUDini\\Media\\icon.tga"
-local FIRST, LAST = 1, 8          -- page 1, steps 1-6 are pages 2-7, page 8
+local FIRST, LAST = 1, 9          -- page 1, steps 1-7 are pages 2-8, page 9
 local LOGIN_DELAY = 2             -- seconds after the loading screen
 local SCALE_EPSILON = 0.005
 
@@ -57,7 +58,9 @@ local FEED_SIZES = {
 	{ text = "setup.feed.medium", font = 14, width = 420, isDefault = true },
 	{ text = "setup.feed.large",  font = 17, width = 500 },
 }
-local HUD_PAGE, SIZE_PAGE, FEED_PAGE = 2, 4, 5
+local HUD_PAGE, SIZE_PAGE, FEED_PAGE, CLASS_PAGE = 2, 4, 5, 8
+-- Step 7's small boxes (TICK-0180): two columns, 26 px tall, 4 px apart.
+local MINI_W, MINI_H, MINI_GAP = (INNER - 10) / 2, 26, 4
 
 ns.setupOpen = false
 
@@ -69,6 +72,7 @@ local wantOpen = false      -- asked for in a fight: open when it ends
 local secondRun = false     -- setup had closed before this run opened
 local own = {}              -- the values at open, for "Keep your own"
 local feedMoving = false    -- Move the feed: the feed alone is unlocked
+local lastSound             -- step 7: the buff sound a check puts back
 
 local function DB() return HUDiniDB end
 
@@ -312,6 +316,18 @@ local STEPS = {
 			}
 		end,
 	},
+	-- Step 7, the alerts for your class (TICK-0180): small boxes from the
+	-- class file in place of the choices, then the alerts already on. Its
+	-- texts name the class (classArg). Go skips it when it has nothing.
+	[CLASS_PAGE] = {
+		texts = "setup.class",
+		intro = "setup.class.intro",
+		classArg = true,
+		rows = function() return {} end,
+		minis = function() return ns.SetupClassBoxes() end,
+		onLines = true,
+		choices = function() return {} end,
+	},
 }
 
 local function AnyPicked(choices)
@@ -347,17 +363,17 @@ local function Choices(n)
 end
 
 --------------------------------------------------------------------------------
--- Page 8: the alerts that are on, and the bars HUDini does not read
--- (its texts keep their setup.p7.* keys)
+-- Step 7: the alerts for your class (TICK-0180). Page 9: your picks, and
+-- the bars HUDini does not read (page 9's texts keep their setup.p7.* keys)
 --------------------------------------------------------------------------------
 
--- The alert keys in the order page 8 lists them, with the row that turns
--- each one on.
+-- The alert keys in the order step 7's "Already on" lists them, with the
+-- row that turns each one on.
 local ALERTS = {
-	{ key = "interrupt", row = "glowOnKickable", text = "setup.p7.interrupt" },
-	{ key = "dispel",    row = "warnDispel",     text = "setup.p7.dispel" },
-	{ key = "purge",     row = "showPurgeable",  text = "setup.p7.purge" },
-	{ key = "keepUp",    row = "warnKeepUp",     text = "setup.p7.keepUp" },
+	{ key = "interrupt", row = "glowOnKickable", text = "setup.class.interrupt" },
+	{ key = "dispel",    row = "warnDispel",     text = "setup.class.dispel" },
+	{ key = "purge",     row = "showPurgeable",  text = "setup.class.purge" },
+	{ key = "keepUp",    row = "warnKeepUp",     text = "setup.class.keepUp" },
 }
 
 -- The spells a class value names, in a fixed order: a name, a list, a
@@ -413,6 +429,174 @@ function ns.SetupAlertLines()
 		end
 	end
 	return lines, unknown, named
+end
+
+-- Step 7's "Already on" block: "Already on:" and the lines, then "More
+-- start as you learn their spells." when the class file names an alert
+-- spell you do not know yet. nil when there is nothing to say.
+local function OnBlock()
+	local lines, unknown = ns.SetupAlertLines()
+	local out = {}
+	if #lines > 0 then
+		out[1] = Text("setup.class.on")
+		for _, line in ipairs(lines) do out[#out + 1] = line end
+	end
+	if unknown then out[#out + 1] = Text("setup.class.more") end
+	return #out > 0 and table.concat(out, "\n") or nil
+end
+
+-- The Options row of a spell's cooldown, to repaint after a bell click.
+-- Options.lua names it by the spell's letters; a name that clashes gets
+-- another name there, which ns.CooldownSettingName gives when it exists.
+local function CooldownRow(spell)
+	if ns.CooldownSettingName then return ns.CooldownSettingName(spell) end
+	return "class_cooldown_" .. (spell:gsub("[^%w]", ""))
+end
+
+-- A small box: label, note() (gray, after the label; nil for none),
+-- checked(), enabled(), click() (write and apply one pick) and rows (the
+-- Options rows to repaint). A gray box keeps its check and takes no click.
+-- A bell box is only for a spell you know (TICK-0201), so it is never gray.
+local function BellBox(name)
+	return {
+		spell = name,
+		label = Text("setup.class.bell", name),
+		checked = function() return ns.GetReadyAlert(name) end,
+		enabled = function() return true end,
+		-- The bell only: the timer bar part stays as it is.
+		click = function() ns.SetReadyAlert(name, not ns.GetReadyAlert(name)) end,
+		rows = { CooldownRow(name) },
+	}
+end
+
+-- Sound when a buff is missing: gray as its Options row is, with no note.
+-- A check puts back the sound picked before (at open, or before an
+-- uncheck), else the default; an uncheck sets Off.
+local function SoundBox()
+	return {
+		isSound = true,
+		label = Text("opt.class.keepUpSound"),
+		checked = function() return ns.GetKeepUpSoundChoice() ~= "off" end,
+		enabled = function()
+			local db = DB()
+			return db.showHealth and (db.warnOwnBuff or db.warnKeepUp) and true or false
+		end,
+		click = function()
+			local choice = ns.GetKeepUpSoundChoice()
+			if choice ~= "off" then
+				lastSound = choice
+				ns.SetKeepUpSound("off")
+			else
+				ns.SetKeepUpSound(lastSound or ns.MISSING_SOUND_DEFAULT)
+			end
+		end,
+		rows = { "class_keepUpSound" },
+	}
+end
+
+-- A missing item (TICK-0182): only for a row whose spell you know. The label
+-- names the item as the game does; an item the game has not loaded yet
+-- takes its spell's name until it has (Alerts.lua asks at login). Gray
+-- without the health bar, as the icon sits by it.
+local function ItemBox(row)
+	local spell = row.make or (type(row.needs) == "table" and row.needs[1]) or row.needs
+	local name = ns.MissingItemName and ns.MissingItemName(row) or tostring(spell)
+	return {
+		isItem = true,
+		item = name,
+		label = Text("setup.class.item", name),
+		checked = function() return ns.GetMissingItem(row.key) end,
+		enabled = function() return DB().showHealth and true or false end,
+		click = function() ns.SetMissingItem(row.key, not ns.GetMissingItem(row.key)) end,
+		rows = { "class_item_" .. row.key }, -- locale: skip a setting name
+	}
+end
+
+-- At most this many bell boxes; the other spells are in Options.
+local MAX_BELLS = 4
+
+-- The class file's spell names in a list field, once each, in order.
+local function Names(key)
+	local out, seen, list = {}, {}, ns.ClassDefault(key)
+	if type(list) ~= "table" then return out, seen end
+	for _, name in ipairs(list) do
+		if type(name) == "string" and name ~= "" and not seen[name] then
+			seen[name] = true
+			out[#out + 1] = name
+		end
+	end
+	return out, seen
+end
+
+-- Step 7's boxes, in order: up to four bells, then the buff sound when the
+-- class file has keepUp or starts the sound on (keepUpSoundOn: a Priest has
+-- no keepUp, and its sound is for a tracked buff), then a missing item for
+-- each row whose spell you know (TICK-0182). A bell is only for a known
+-- spell of the class file's readyAlert (TICK-0201): those in readyAlertOn
+-- first, then the others, each part in readyAlert order. A field the class
+-- file does not have gives no box.
+function ns.SetupClassBoxes()
+	local list = {}
+	local spells = Names("readyAlert")
+	local _, startsOn = Names("readyAlertOn")
+	local known = {}
+	for _, name in ipairs(spells) do
+		if ns.KnownSpell(name) then known[#known + 1] = name end
+	end
+	for _, first in ipairs({ true, false }) do
+		for _, name in ipairs(known) do
+			if (startsOn[name] == true) == first and #list < MAX_BELLS then list[#list + 1] = BellBox(name) end
+		end
+	end
+	if ns.ClassDefault("keepUp") ~= nil or ns.ClassDefault("keepUpSoundOn") == true then
+		list[#list + 1] = SoundBox()
+	end
+	for _, row in ipairs(ns.MissingItemRows()) do
+		if ns.MissingItemKnown and ns.MissingItemKnown(row) then list[#list + 1] = ItemBox(row) end
+	end
+	return list
+end
+
+-- Step 7 shows when it has a box or a line.
+local function HasClassPage()
+	return #ns.SetupClassBoxes() > 0 or OnBlock() ~= nil
+end
+
+-- The step count: 7 with step 7, else 6.
+local function StepCount()
+	return HasClassPage() and LAST - 2 or LAST - 3
+end
+
+-- Page 9's picks: "Your Mage alerts:", one line for each kind of box step
+-- 7 showed, then the /hud test line. nil without step 7. Step 7 with only
+-- its "Already on" lines gives the /hud test line alone: it is a whole
+-- sentence, and a heading with no line under it reads wrong.
+local function ClassPicks()
+	if not HasClassPage() then return nil end
+	local out, bells, items, hasBell, hasSound, hasItem = {}, {}, {}, false, false, false
+	for _, box in ipairs(ns.SetupClassBoxes()) do
+		if box.isSound then
+			hasSound = true
+		elseif box.isItem then
+			hasItem = true
+			if box.checked() then items[#items + 1] = box.item end
+		else
+			hasBell = true
+			if box.checked() then bells[#bells + 1] = box.spell end
+		end
+	end
+	if hasBell or hasSound or hasItem then out[1] = Text("setup.p7.classPicks", (UnitClass("player"))) end
+	if hasBell then
+		out[#out + 1] = #bells > 0 and Text("setup.p7.bells", table.concat(bells, ", ")) or Text("setup.p7.noBells")
+	end
+	if hasSound then
+		local choice = ns.GetKeepUpSoundChoice()
+		out[#out + 1] = Text("setup.p7.sound", choice == "off" and Text("opt.sound.off") or Text("sound." .. choice))
+	end
+	-- No line while no missing item is checked (the design's rule).
+	if #items > 0 then out[#out + 1] = Text("setup.p7.items", table.concat(items, ", ")) end
+	out[#out + 1] = Text("setup.p7.test")
+	return table.concat(out, "\n")
 end
 
 -- Action Bars 4-8 that are on screen and hold an action, while Row mode
@@ -607,6 +791,58 @@ local function FillBox(r, box)
 	return h
 end
 
+-- Step 7's small box (TICK-0180): the game's check box, the label, and a
+-- gray note after it; no line under it. A click runs the box's one pick,
+-- repaints its Options rows and the page.
+local function MiniBox(parent)
+	local r = CreateFrame("Button", nil, parent, "BackdropTemplate")
+	r:SetSize(MINI_W, MINI_H)
+	r:SetBackdrop({
+		bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+		edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+		tile = true, tileSize = 16, edgeSize = 12,
+		insets = { left = 3, right = 3, top = 3, bottom = 3 },
+	})
+	r:SetBackdropColor(0, 0, 0, 0.4)
+	r.check = CreateFrame("CheckButton", nil, r, "UICheckButtonTemplate")
+	r.check:SetSize(22, 22)
+	r.check:SetPoint("LEFT", 3, 0)
+	r.name = Label(r, "GameFontNormal")
+	r.name:SetWordWrap(false)
+	r.name:SetPoint("LEFT", 28, 0)
+	r.note = Label(r, "GameFontDisableSmall")
+	r.note:SetWordWrap(false)
+	r.note:SetPoint("LEFT", r.name, "RIGHT", 4, 0)
+	local function Click()
+		local box = r.box
+		if box and box.enabled() then
+			box.click()
+			RepaintOptions(box.rows)
+		end
+		Paint()
+	end
+	r:SetScript("OnClick", Click)
+	r.check:SetScript("OnClick", Click)
+	return r
+end
+
+local function FillMini(r, box)
+	r.box = box
+	r.name:SetText(box.label)
+	local on, enabled = box.checked() and true or false, box.enabled()
+	-- A gray box keeps its check, so the player sees what starts on.
+	r.check:SetChecked(on)
+	r.check:SetEnabled(enabled)
+	r:SetEnabled(enabled)
+	r.name:SetFontObject(enabled and "GameFontNormal" or "GameFontDisable")
+	local note = not enabled and box.note and box.note() or nil
+	r.note:SetText(note or "")
+	r.note:SetShown(note ~= nil)
+	local c = (on and enabled) and ROW_PICKED or ROW_BORDER
+	r:SetBackdropBorderColor(c[1], c[2], c[3])
+	r:Show()
+end
+
 local function Build()
 	local f = CreateFrame("Frame", "HUDiniSetup", UIParent, "BackdropTemplate")
 	f:SetWidth(WIDTH)
@@ -619,13 +855,17 @@ local function Build()
 	Movable(f)
 	f:Hide()
 
-	local p = { rows = {}, boxes = {} }
+	local p = { rows = {}, boxes = {}, minis = {} }
 	p.icon = f:CreateTexture(nil, "ARTWORK")
 	p.icon:SetTexture(ICON)
 	p.icon:SetSize(40, 40)
 	p.icon:SetPoint("TOPLEFT", PAD, -PAD)
 	p.title = Label(f, "GameFontNormalLarge")
 	p.title:SetPoint("TOPLEFT", p.icon, "TOPRIGHT", 10, -2)
+	-- The version on the title line (TICK-0113): the step counter owns the
+	-- line under the title on steps 1-6 only, so this one holds still.
+	p.version = Label(f, "GameFontDisable")
+	p.version:SetPoint("BOTTOMLEFT", p.title, "BOTTOMRIGHT", 8, 0)
 	p.counter = Label(f, "GameFontDisable")
 	p.counter:SetPoint("TOPLEFT", p.title, "BOTTOMLEFT", 0, -4)
 
@@ -639,18 +879,18 @@ local function Build()
 	end)
 	p.x:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
-	p.intro    = Label(f, "GameFontHighlight")     -- steps 1-6
+	p.intro    = Label(f, "GameFontHighlight")     -- steps 1-7
 	p.top      = Label(f, "GameFontHighlight")     -- page 1's pitch, or the second-run line
 	p.question = Label(f, "GameFontNormal")
-	p.body     = Label(f, "GameFontHighlight")     -- page 8
-	p.alerts   = Label(f, "GameFontHighlight")     -- page 8
-	p.bars     = Label(f, "GameFontHighlight")     -- page 8
+	p.body     = Label(f, "GameFontHighlight")     -- page 9
+	p.alerts   = Label(f, "GameFontHighlight")     -- step 7's Already on, page 9's picks
+	p.bars     = Label(f, "GameFontHighlight")     -- page 9
 	p.under    = Label(f, "GameFontHighlight")
 	p.lesson   = Label(f, "GameFontHighlight")     -- step 6
 	p.gryphons = Label(f, "GameFontHighlight")     -- step 6
 	p.steps    = Label(f, "GameFontHighlight")     -- page 1
 	p.changes  = Label(f, "GameFontHighlightSmall")
-	p.last     = Label(f, "GameFontHighlight")     -- page 8
+	p.last     = Label(f, "GameFontHighlight")     -- page 9
 	for _, key in ipairs(PARTS) do
 		p[key]:SetWidth(INNER)
 	end
@@ -744,8 +984,16 @@ function Paint()
 	local p, n, step = parts, page, STEPS[page]
 	local db = DB()
 	p.title:SetText(Text("setup.title"))
+	-- The same words as the About window's version line.
+	p.version:SetText(ns.VERSION ~= "unknown" and Text("about.version", ns.VERSION) or Text("about.versionUnknown"))
 	local isStep = n > FIRST and n < LAST
-	p.counter:SetText(isStep and Text("setup.step", n - 1, LAST - 2) or "")
+	p.counter:SetText(isStep and Text("setup.step", n - 1, StepCount()) or "")
+	-- Step 7's texts name the class.
+	local class = step and step.classArg and (UnitClass("player")) or nil
+	local function T(key)
+		if class then return Text(key, class) end
+		return Text(key)
+	end
 
 	local stack = {}
 	local function Add(part, text)
@@ -758,6 +1006,7 @@ function Paint()
 	end
 	for _, r in ipairs(p.rows) do r:Hide() end
 	for _, r in ipairs(p.boxes) do r:Hide() end
+	for _, r in ipairs(p.minis) do r:Hide() end
 	p.moveHud:Hide()
 	p.sizeLabel:Hide()
 	for _, b in ipairs(p.sizes) do b:Hide() end
@@ -766,16 +1015,19 @@ function Paint()
 	local rowsAt
 	if step then
 		-- A step says what the part is before it asks (TICK-0076).
-		if step.intro then Add(p.intro, Text(step.intro)) end
+		if step.intro then Add(p.intro, T(step.intro)) end
 		-- A second run says what Next does now, not what HUDini is (TICK-0083).
 		if n == FIRST then Add(p.top, secondRun and Text("setup.p1.again") or Text("setup.p1.pitch")) end
-		Add(p.question, Text(step.question or step.texts .. ".question"))
+		Add(p.question, T(step.question or step.texts .. ".question"))
 		rowsAt = #stack
+		-- Step 7: the alerts already on, under its boxes.
+		local on = step.onLines and OnBlock()
+		if on then Add(p.alerts, on) end
 		if n == FIRST then
 			Add(p.under, Text("setup.p1.under"))
 			Add(p.steps, Text("setup.p1.steps"))
 		else
-			Add(p.under, Text(step.under or step.texts .. ".under"))
+			Add(p.under, T(step.under or step.texts .. ".under"))
 			-- Read after the pick and before Next; off, it takes no space.
 			if step.lesson and step.lesson() then Add(p.lesson, Text(step.texts .. ".lesson")) end
 			if step.gryphons then Add(p.gryphons, step.gryphons()) end
@@ -786,16 +1038,9 @@ function Paint()
 	else
 		Add(p.question, Text("setup.p7.question"))
 		Add(p.body, db.hideWhenIdle and Text("setup.p7.body") or Text("setup.p7.bodyAlways"))
-		local lines, unknown, named = ns.SetupAlertLines()
-		local class = UnitClass("player")
-		if #lines > 0 then
-			local text = Text("setup.p7.alerts", class) .. "\n" .. table.concat(lines, "\n")
-			if unknown then text = text .. "\n" .. Text("setup.p7.more") end
-			-- /hud test plays them (TICK-0096); only when some are on.
-			Add(p.alerts, text .. "\n" .. Text("setup.p7.test"))
-		elseif named then
-			Add(p.alerts, Text("setup.p7.noAlerts", class))
-		end
+		-- Step 7's picks, then /hud test (TICK-0096); none without step 7.
+		local picks = ClassPicks()
+		if picks then Add(p.alerts, picks) end
 		local bars = ns.SetupUnreadBars()
 		if #bars > 0 then Add(p.bars, Text("setup.p7.bars", BarNames(bars))) end
 		Add(p.last, Text("setup.p7.last"))
@@ -820,6 +1065,17 @@ function Paint()
 				local r = p.boxes[j] or BoxRow(frame)
 				p.boxes[j] = r
 				Place(r, FillBox(r, box) - GAP + 4)
+			end
+			-- Step 7's small boxes: left to right, then down.
+			local minis = step.minis and step.minis() or {}
+			for j, box in ipairs(minis) do
+				local r = p.minis[j] or MiniBox(frame)
+				p.minis[j] = r
+				FillMini(r, box)
+				local col = (j - 1) % 2
+				r:ClearAllPoints()
+				r:SetPoint("TOPLEFT", frame, "TOPLEFT", PAD + col * (MINI_W + 10), -y)
+				if col == 1 or j == #minis then y = y + MINI_H + MINI_GAP end
 			end
 			y = y + GAP - 4
 			if n == SIZE_PAGE then
@@ -890,7 +1146,10 @@ function Go(n)
 	Lock()
 	Samples(false)
 	SampleTarget(false)
+	local back = n < page
 	page = math.max(FIRST, math.min(LAST, n))
+	-- A class with nothing for step 7 goes past it, either way.
+	if page == CLASS_PAGE and not HasClassPage() then page = back and page - 1 or page + 1 end
 	if page == FEED_PAGE then Samples(true) end
 	if page == HUD_PAGE then SampleTarget(true) end
 	ns.HUDini:UpdateVisibility()
@@ -938,6 +1197,9 @@ local function Open(quiet)
 	isOpen, hiddenForFight, wantOpen = true, false, false
 	page = FIRST
 	TakeOwn()
+	-- Step 7's sound box puts back the sound on at open.
+	local sound = ns.GetKeepUpSoundChoice()
+	if sound ~= "off" then lastSound = sound end
 	Show()
 end
 

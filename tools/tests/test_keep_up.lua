@@ -5,12 +5,17 @@
 -- So "not found" must not read as "no seal": the keep-up list goes by what
 -- HUDini last saw, as your buffs do (Auras.lua, TICK-0125).
 
+-- Test class profiles, not the live class files (classes_fixture.lua).
+local Classes = assert(loadstring(H.readFile("tools/tests/classes_fixture.lua")))()
+
 local SOR, SOTC = 20154, 21082
 
 -- A Paladin who knows two seals, with no aura on. w.auras[name] is the
--- aura's data; w.hidden hides every aura, as a fight does.
-local function World(before, class, className, spells)
+-- aura's data; w.hidden hides every aura, as a fight does. live: the
+-- class files as they are, not the test profiles.
+local function World(before, class, className, spells, live)
 	local w = H.world()
+	if not live then Classes.Use(w) end
 	w.class, w.className = class or "PALADIN", className or "Paladin"
 	spells = spells or { [SOR] = "Seal of Righteousness", [SOTC] = "Seal of the Crusader" }
 	local ids = {}
@@ -192,7 +197,7 @@ for _, c in ipairs({ { "PALADIN", "Paladin" }, { "MAGE", "Mage" }, { "WARRIOR", 
 		H.ok(type(list) == "table" and #list > 0, "the class file has a keep-up list")
 		local spells = {}
 		for i, name in ipairs(list) do spells[100 + i] = name end
-		local w = World(nil, c[1], c[2], spells)
+		local w = World(nil, c[1], c[2], spells, true)
 		Aura(w, list[1], 600)
 		Fight(w, true)
 		H.eq(Shown(w), nil, list[1] .. " on, hidden: not missing")

@@ -6,6 +6,8 @@
 -- like, and that the client has the frame type, needs a test sitting.
 
 -- A logged-in player. The fake container records what HUDini tells it.
+-- w.hasTarget: on by default; false for no target. w.secret: values
+-- issecretvalue flags.
 -- w.noContainer: CreateFrame("AuraContainer") throws, as on a client
 -- without the frame type. w.noGroups: it makes a frame with no
 -- AddAuraGroup. w.noGroupLayout: it has no SetAuraGroupLayout.
@@ -47,6 +49,11 @@ local function World(setup)
 		w.containers[#w.containers + 1] = f
 		return f
 	end
+	-- You have a target: a target row is on only while there is one
+	-- (TICK-0160). A test with no target sets w.hasTarget = false.
+	w.hasTarget = true
+	w.secret = {}
+	env.issecretvalue = function(v) return v ~= nil and w.secret[v] == true end
 	if setup then setup(w) end
 	local ns = w:loadAddon()
 	return w, ns
@@ -614,4 +621,104 @@ H.test("reads no aura: the game's row does it", function()
 			"GetAuraData", "ForEachAura", "UNIT_AURA" }) do
 		H.eq(src:find(api, 1, true), nil, "no " .. api)
 	end
+end)
+
+--------------------------------------------------------------------------------
+-- No target, no row (TICK-0160). DK cleared a target and one of its buffs
+-- stayed on the screen until the next target. The row was left on with no
+-- target. Now a target change switches each target row off first, and on
+-- and read again only while there is a target. The fake cannot show the
+-- old icon; that the screen clears needs a test in the game.
+--------------------------------------------------------------------------------
+
+-- The calls since mark, by name.
+local function Since(seen, mark)
+	local out = {}
+	for i = mark + 1, #seen.calls do out[#out + 1] = seen.calls[i][1] end
+	return table.concat(out, " ")
+end
+
+H.test("a cleared target switches both target rows off, in a fight too", function()
+	local w, ns = World()
+	for _, fight in ipairs({ false, true }) do
+		w.combat = fight
+		for _, getRow in ipairs({ ns.TargetDebuffRow, ns.TargetBuffRow }) do
+			local seen = getRow().seen
+			H.eq(seen.enabled, true, "on with a target")
+			local updates, mark = seen.updates or 0, #seen.calls
+			w.hasTarget = false
+			w:fire("PLAYER_TARGET_CHANGED")
+			H.eq(seen.enabled, false, "off with no target")
+			H.eq(seen.updates or 0, updates, "nothing read with no target")
+			H.eq(Since(seen, mark), "SetEnabled", "only switched off")
+			mark = #seen.calls
+			w.hasTarget = true
+			w:fire("PLAYER_TARGET_CHANGED")
+			H.eq(Since(seen, mark), "SetEnabled SetEnabled UpdateAllAuras", "off, on, then read")
+			H.eq(seen.enabled, true, "on again with a target")
+		end
+	end
+	H.eq(#w:takeBlocked(), 0, "nothing blocked in the fight")
+end)
+
+H.test("a new target while you have one: off first, then on and read again", function()
+	local w, ns = World()
+	local seen = ns.TargetBuffRow().seen
+	local mark = #seen.calls
+	w:fire("PLAYER_TARGET_CHANGED")
+	H.eq(Since(seen, mark), "SetEnabled SetEnabled UpdateAllAuras", "the old target's icons go first")
+	H.eq(seen.calls[mark + 1][2], false, "off")
+	H.eq(seen.calls[mark + 2][2], true, "then on")
+end)
+
+H.test("logged in with no target: the target rows start off, the row on you is on", function()
+	local w, ns = World(function(w) w.hasTarget = false end)
+	H.eq(ns.TargetDebuffRow().seen.enabled, false, "your debuffs on the target: off")
+	H.eq(ns.TargetBuffRow().seen.enabled, false, "the target's buffs: off")
+	H.eq(ns.TargetBuffRow().seen.updates or 0, 0, "nothing read")
+	H.eq(ns.TargetBuffRow():IsShown(), true, "built and shown, ready for a target")
+	H.eq(ns.PlayerDebuffRow().seen.unit, "player", "the row on you")
+	w.hasTarget = true
+	w:fire("PLAYER_TARGET_CHANGED")
+	H.eq(ns.TargetBuffRow().seen.enabled, true, "a target switches it on")
+	H.eq(ns.TargetBuffRow().seen.updates, 1, "and it reads the target")
+end)
+
+H.test("a cleared target with the row off by its setting stays off and reads nothing", function()
+	local w, ns = World()
+	local row = ns.TargetBuffRow()
+	w.env.HUDiniDB.showTargetBuffs = false
+	ns.UpdateModules()
+	local mark = #row.seen.calls
+	w:fire("PLAYER_TARGET_CHANGED")
+	H.eq(Since(row.seen, mark), "", "a module that is off hears no target change")
+	H.eq(row.seen.enabled, false, "off")
+end)
+
+H.test("UnitExists that throws or answers a secret counts as no target, with no error", function()
+	local w, ns = World()
+	local seen = ns.TargetBuffRow().seen
+	-- Plain first: true switches it on.
+	w:fire("PLAYER_TARGET_CHANGED")
+	H.eq(seen.enabled, true, "a plain true: on")
+	-- The same true, secret: off.
+	w.secret[true] = true
+	w:fire("PLAYER_TARGET_CHANGED")
+	w.secret[true] = nil
+	H.eq(seen.enabled, false, "a secret answer: off")
+	w:fire("PLAYER_TARGET_CHANGED")
+	H.eq(seen.enabled, true, "on again")
+	-- Throw only for this file: the other target handlers call it too.
+	local plain = w.env.UnitExists
+	w.env.UnitExists = function(unit)
+		for level = 2, 4 do
+			local info = debug.getinfo(level, "S")
+			if info and info.source == "@TargetDebuffs.lua" then error("blocked") end
+		end
+		return plain(unit)
+	end
+	local ok, err = pcall(w.fire, w, "PLAYER_TARGET_CHANGED")
+	w.env.UnitExists = plain
+	H.eq(ok, true, "no error: " .. tostring(err))
+	H.eq(seen.enabled, false, "a throw: off")
 end)

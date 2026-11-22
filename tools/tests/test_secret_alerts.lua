@@ -4,13 +4,16 @@
 -- it does for no answer, and throws nothing. So a missing Plain() fails
 -- the test (the method of TICK-0110).
 
+-- Test class profiles, not the live class files (classes_fixture.lua).
+local Classes = assert(loadstring(H.readFile("tools/tests/classes_fixture.lua")))()
+
 -- A logged-in world. w.secret: the values issecretvalue calls secret.
 -- w:Once(v) gives a stub that returns v and flags the very next check
 -- secret if it asks about v: for true and false, which other answers
 -- share. The next check is the guard's; without the guard the flag goes
 -- unused. w:Field(t, key, v) does the same for a field read.
 local function World(setup)
-	local w = H.world()
+	local w = Classes.Use(H.world())
 	local env = w.env
 	w.secret = {}
 	env.issecretvalue = function(v)
@@ -73,11 +76,13 @@ H.test("a secret on-the-GCD answer does not count as ready", function()
 		env.C_Spell.IsSpellUsable = function() return true end
 	end)
 	w.auras["playerHARMFUL"] = { { dispelName = "Poison" } }
-	w.cd = { isActive = true, isOnGCD = true }
+	-- isOnGCD is read only inside SPELL_UPDATE_COOLDOWN (TICK-0161).
 	ns.UpdateRacialGlow()
+	w.cd = { isActive = true, isOnGCD = true }
+	w:fire("SPELL_UPDATE_COOLDOWN")
 	H.eq(ns.HUDini.alertGlow.racial, 20594, "plain: on the GCD only, so lit")
 	w.cd = w:Field({ isActive = true }, "isOnGCD", true)
-	ns.UpdateRacialGlow()
+	w:fire("SPELL_UPDATE_COOLDOWN")
 	H.eq(ns.HUDini.alertGlow.racial, nil, "secret: not lit")
 end)
 

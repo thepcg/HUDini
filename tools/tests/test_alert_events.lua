@@ -261,3 +261,15 @@ H.test("the target buff icon comes back when the fight ends", function()
 	H.eq(TargetBuffIcon(w):IsShown(), true, "the fight ends: shown")
 	H.eq(Live(w), idle + 1, "and the ticker runs again")
 end)
+
+H.test("auras hidden out of a fight (a PvP map): no target buff icon", function()
+	local w = BuffWorld()
+	local hidden = true
+	w.env.C_Secrets = { ShouldAurasBeSecret = function() return hidden end }
+	w.hasTarget = true
+	w:fire("PLAYER_TARGET_CHANGED")
+	H.eq(TargetBuffIcon(w):IsShown(), false, "not found while hidden: the game will not say")
+	hidden = false
+	w:runTickers()
+	H.eq(TargetBuffIcon(w):IsShown(), true, "readable again and still not found: shown")
+end)

@@ -4,6 +4,9 @@
 -- resource as saved choices, the action-bar spell list, and the names after
 -- "Class default:".
 
+-- Test class profiles, not the live class files (classes_fixture.lua).
+local Classes = assert(loadstring(H.readFile("tools/tests/classes_fixture.lua")))()
+
 local D, P = nil, nil -- ns.PICK_DEFAULT and ns.PICK_NONE, once loaded
 
 -- A world for one class. spells: [id] = name, every one known. o.bars:
@@ -12,7 +15,7 @@ local D, P = nil, nil -- ns.PICK_DEFAULT and ns.PICK_NONE, once loaded
 -- game's issecretvalue (Util.lua reads it at load).
 local function World(class, className, spells, o)
 	o = o or {}
-	local w = H.world()
+	local w = Classes.Use(H.world())
 	w.class, w.className = class, className
 	local env = w.env
 	env.issecretvalue = o.secret

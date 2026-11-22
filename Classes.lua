@@ -20,6 +20,21 @@
 			auraMap   = { ["Spell"] = { "Buff" } },    -- extra buff names per icon
 			weaponBuff = { "Rockbiter Weapon" },       -- know one, and each weapon needs one
 			powers    = { "MANA" },                    -- every power the class can show
+			readyAlert = { "Evocation" },              -- offered for a cooldown ready alert, off
+			--          until you turn it on (TICK-0157)
+			readyAlertOn = { "Evocation" },            -- these ready alerts start on (the bell)
+			--          until you save a choice; any spell the page offers (D-047)
+			keepUpSoundOn = true,                      -- the buff-missing sound starts on, with
+			--          the default sound, until you save a choice (D-047)
+			missingItem = {                            -- an icon by your health bar, out of a
+				--     fight, when your bags hold none of the row's items (TICK-0182):
+				{ key = "manaGem", make = "Conjure Mana Gem", items = { 5514 }, on = true },
+				--     key: the saved choice's name, never renamed. make: the spell that
+				--     makes it; it can wake the HUD. Or needs = { "Reincarnation" }: the
+				--     spells that use it; it never wakes the HUD. items: item IDs, any
+				--     one counts. on: starts on until you save a choice. An optional
+				--     buff = "Soulstone Resurrection": that buff on you counts as one.
+			},
 			ids       = { ["Counterspell"] = 2139 },   -- enUS name -> a spell ID, any rank
 		})
 
@@ -97,9 +112,6 @@ local SPELL_IDS = {
 	["Blessing of Kings"] = 20217, ["Greater Blessing of Kings"] = 25898,
 	["Blessing of Might"] = 19740, ["Greater Blessing of Might"] = 25782,
 	["Blessing of Wisdom"] = 19742, ["Greater Blessing of Wisdom"] = 25894,
-	["Blessing of Salvation"] = 1038, ["Greater Blessing of Salvation"] = 25895,
-	["Blessing of Light"] = 19977, ["Greater Blessing of Light"] = 25890,
-	["Blessing of Sanctuary"] = 20911, ["Greater Blessing of Sanctuary"] = 25899,
 	["Blessing of Freedom"] = 1044, ["Blessing of Protection"] = 1022,
 	["Blessing of Sacrifice"] = 6940,
 	-- Food and drink
@@ -350,9 +362,7 @@ local PAIRS = {
 	{ "Blessing of Kings",     "Greater Blessing of Kings", blessing = true },
 	{ "Blessing of Might",     "Greater Blessing of Might", blessing = true },
 	{ "Blessing of Wisdom",    "Greater Blessing of Wisdom", blessing = true },
-	{ "Blessing of Salvation", "Greater Blessing of Salvation", blessing = true },
-	{ "Blessing of Light",     "Greater Blessing of Light", blessing = true },
-	{ "Blessing of Sanctuary", "Greater Blessing of Sanctuary", blessing = true },
+	-- WoW Forever took out Salvation, Light and Sanctuary (TICK-0174, TICK-0200).
 }
 -- locale: end
 
@@ -439,6 +449,16 @@ local function ProfileSpells(p)
 		end
 	end
 	AddAll(p.weaponBuff)
+	AddAll(p.readyAlert)
+	if type(p.missingItem) == "table" then
+		for _, row in ipairs(p.missingItem) do
+			if type(row) == "table" then
+				Add(row.make)
+				AddAll(row.needs)
+				Add(row.buff)
+			end
+		end
+	end
 	table.sort(out)
 	return out
 end
@@ -696,6 +716,396 @@ function ns.SetClassPick(key, pick, dispelType)
 	else
 		mine[key] = value
 	end
+	return true
+end
+
+--------------------------------------------------------------------------------
+-- Cooldown ready alerts (TICK-0157, GitHub #1)
+--
+-- A spell you turn on plays a sound, and its icon on the HUD glows, when its
+-- cooldown ends (Alerts.lua, section 9). Each spell is off until you turn it
+-- on, unless the class file's readyAlertOn names it: then it starts on
+-- until you save a choice (D-047, TICK-0181). The class file's readyAlert
+-- list is what the page offers first, then every other spell you learned
+-- that has a cooldown and every readyAlertOn spell you know (TICK-0162,
+-- D-042).
+-- Saved per class, off as false so it wins over a start of on:
+--   HUDiniDB.classes[token].readyAlerts = { ["Name"] = true | false }
+-- The name is the one the page offered (the client's language). Before
+-- TICK-0181 an Off saved nothing, so it reads as the class file's start.
+--------------------------------------------------------------------------------
+
+-- Every spell you learned with a cooldown of its own, A to Z, from your
+-- spellbook. A spell counts when its book entry is a learned spell (not a
+-- future one, not passive, not of your other spec, not a guild perk) and
+-- the game gives it a base cooldown above zero or two or more charges.
+-- The book is read only out of a fight: when the list is first asked for,
+-- a moment after each SPELLS_CHANGED, and when a fight ends after one. In
+-- a fight the last list stands. A secret, missing or failed answer leaves
+-- that spell out and marks the list unsure, so the book is read again; a
+-- book with no spell in it yet (early at login) is unsure too. When a
+-- read changes the list, each function given to ns.WatchLearnedCooldowns
+-- runs (the options page rebuilds its rows).
+local learnedCooldowns -- the names, A to Z; nil until the book was read
+local learnedStale = true
+local learnedPending = false -- a read is due a moment after SPELLS_CHANGED
+local learnedWatchers = {}
+
+local function BookEnum(enum, key, fallback)
+	local t = Enum and Enum[enum]
+	local v = t and t[key]
+	if type(v) == "number" then return v end
+	return fallback
+end
+
+-- Whether the game plainly gives the spell a cooldown: a base cooldown
+-- above zero (milliseconds), or two or more charges. The second value is
+-- true when an answer was secret or failed, so the first may be wrong.
+local function HasCooldown(id)
+	local unsure = false
+	local base = (C_Spell and C_Spell.GetSpellBaseCooldown) or _G.GetSpellBaseCooldown
+	if type(base) == "function" then
+		local ok, ms = pcall(base, id)
+		ms = ok and ns.Plain(ms) or nil
+		if type(ms) ~= "number" then
+			unsure = true
+		elseif ms > 0 then
+			return true, false
+		end
+	end
+	local charges = C_Spell and C_Spell.GetSpellCharges
+	if type(charges) == "function" then
+		local ok, info = pcall(charges, id)
+		if not ok or (info ~= nil and type(info) ~= "table") then
+			unsure = true
+		elseif info then
+			-- type() is safe on a secret value; a compare is not.
+			local raw = info.maxCharges
+			local max = ns.Plain(raw)
+			if type(max) == "number" and max >= 2 then return true, false end
+			if type(max) ~= "number" and type(raw) ~= "nil" then unsure = true end
+		end
+	end
+	return false, unsure
+end
+
+-- A flag of a book entry or line: true, false, or nil when it is missing.
+-- A secret flag counts as true, so the entry is left out.
+local function Flag(v)
+	if ns.IsSecret(v) then return true end
+	return v == true
+end
+
+-- One spellbook entry. Returns its ID and name (nil, nil when it is not a
+-- learned spell you can cast), true when it is a spell entry at all, and
+-- true when an answer was secret or missing, so the entry may be wrong.
+local function BookSpell(info)
+	local itemType = ns.Plain(info.itemType)
+	if itemType == nil then return nil, nil, false, true end
+	if itemType ~= BookEnum("SpellBookItemType", "Spell", 1) then return nil, nil, false, false end -- locale: skip an enum key
+	local secretFlag = ns.IsSecret(info.isPassive) or ns.IsSecret(info.isOffSpec)
+	if Flag(info.isPassive) or Flag(info.isOffSpec) then return nil, nil, true, secretFlag end
+	local id, name = ns.Plain(info.spellID), ns.Plain(info.name)
+	if type(id) ~= "number" or id <= 0 or type(name) ~= "string" or name == "" then
+		return nil, nil, true, true
+	end
+	return id, name, true, false
+end
+
+-- The names, A to Z, and true when some part could not be read. nil when
+-- this client has no spellbook API.
+local function ReadBook()
+	local book = _G.C_SpellBook
+	if not (book and book.GetNumSpellBookSkillLines and book.GetSpellBookSkillLineInfo
+		and book.GetSpellBookItemInfo) then
+		return nil
+	end
+	local bank = BookEnum("SpellBookSpellBank", "Player", 0) -- locale: skip an enum key
+	local ok, lines = pcall(book.GetNumSpellBookSkillLines)
+	lines = ok and ns.Plain(lines) or nil
+	if type(lines) ~= "number" then return nil end
+	local names, seen, unsure, spells = {}, {}, false, 0
+	for l = 1, lines do
+		local okLine, line = pcall(book.GetSpellBookSkillLineInfo, l)
+		local offset = okLine and type(line) == "table" and ns.Plain(line.itemIndexOffset) or nil
+		local count = okLine and type(line) == "table" and ns.Plain(line.numSpellBookItems) or nil
+		if type(offset) ~= "number" or type(count) ~= "number" then
+			unsure = true
+		elseif not (Flag(line.isGuild) or Flag(line.shouldHide)) then
+			for i = offset + 1, offset + count do
+				local okItem, info = pcall(book.GetSpellBookItemInfo, i, bank)
+				local okRead, id, name, isSpell, odd = false, nil, nil, false, false
+				if okItem and type(info) == "table" then
+					okRead, id, name, isSpell, odd = pcall(BookSpell, info)
+				end
+				if not okRead or odd then unsure = true end
+				if okRead and isSpell then spells = spells + 1 end
+				if okRead and id and not seen[name] then
+					local okCd, has, cdUnsure = pcall(HasCooldown, id)
+					if not okCd or cdUnsure then unsure = true end
+					if not okCd then has = false end
+					if has then
+						seen[name] = true
+						names[#names + 1] = name
+					end
+				end
+			end
+		end
+	end
+	if spells == 0 then unsure = true end
+	table.sort(names)
+	return names, unsure
+end
+
+-- Reads the book when it is due and not in a fight. Returns true when the
+-- list changed.
+local function Refresh()
+	if not learnedStale or InCombatLockdown() then return false end
+	local names, unsure = ReadBook()
+	if not names then return false end
+	local old = learnedCooldowns or {}
+	learnedCooldowns = names
+	learnedStale = unsure and true or false
+	if #old ~= #names then return true end
+	for i, name in ipairs(names) do
+		if old[i] ~= name then return true end
+	end
+	return false
+end
+
+-- fn() runs after a read out of a fight changes the list. It does not run
+-- for the read that ns.LearnedCooldownSpells itself makes.
+function ns.WatchLearnedCooldowns(fn)
+	if type(fn) == "function" then learnedWatchers[#learnedWatchers + 1] = fn end
+end
+
+local function ReadAndTell()
+	learnedPending = false
+	if not Refresh() then return end
+	for _, fn in ipairs(learnedWatchers) do
+		local ok, err = pcall(fn)
+		if not ok then
+			local handler = geterrorhandler and geterrorhandler()
+			if handler then handler(err) end
+		end
+	end
+end
+
+-- SPELLS_CHANGED can come many times in a row (login, a new level, a
+-- form): one read a moment after the first.
+local function ReadSoon()
+	if learnedPending then return end
+	learnedPending = true
+	if C_Timer and C_Timer.After then
+		C_Timer.After(0.5, ReadAndTell)
+	else
+		ReadAndTell()
+	end
+end
+
+local learnedWatch = CreateFrame("Frame")
+learnedWatch:RegisterEvent("SPELLS_CHANGED")
+learnedWatch:RegisterEvent("PLAYER_REGEN_ENABLED")
+learnedWatch:SetScript("OnEvent", function(_, event)
+	if event == "SPELLS_CHANGED" then learnedStale = true end
+	if learnedStale then ReadSoon() end
+end)
+
+-- A copy of the list, A to Z. Empty before the first read out of a fight.
+function ns.LearnedCooldownSpells()
+	Refresh()
+	local out = {}
+	for i, name in ipairs(learnedCooldowns or {}) do out[i] = name end
+	return out
+end
+
+-- The spells to offer: the class file's list in its order, then every
+-- other spell you learned with a cooldown and any other spell you turned
+-- on, together A to Z. Each once. The second value is how many of the
+-- first are the class file's, for the page to group them.
+function ns.ReadyAlertSpells()
+	local out, seen = {}, {}
+	local list = ns.ClassDefault("readyAlert")
+	if type(list) == "table" then
+		for _, name in ipairs(list) do
+			if type(name) == "string" and name ~= "" and not seen[name] then
+				seen[name] = true
+				out[#out + 1] = name
+			end
+		end
+	end
+	local classCount = #out
+	local extra = {}
+	local function Add(name)
+		if type(name) == "string" and name ~= "" and not seen[name] then
+			seen[name] = true
+			extra[#extra + 1] = name
+		end
+	end
+	for _, name in ipairs(ns.LearnedCooldownSpells()) do Add(name) end
+	-- A spell that starts on, when you know it: a class file may name every
+	-- race's cooldown (D-047), and another race's is no row of yours.
+	local starts = ns.ClassDefault("readyAlertOn")
+	if type(starts) == "table" then
+		for _, name in ipairs(starts) do
+			if not ns.KnownSpell or ns.KnownSpell(name) then Add(name) end
+		end
+	end
+	local saved = HUDiniDB and ns.ClassDB().readyAlerts
+	if type(saved) == "table" then
+		for name, on in pairs(saved) do
+			if on == true then Add(name) end
+		end
+	end
+	table.sort(extra)
+	for _, name in ipairs(extra) do out[#out + 1] = name end
+	return out, classCount
+end
+
+-- True when the ready alert for this spell name is on: your saved choice,
+-- else true when the class file's readyAlertOn names it (D-047).
+function ns.GetReadyAlert(spell)
+	if type(spell) ~= "string" or not HUDiniDB then return false end
+	local saved = ns.ClassDB().readyAlerts
+	local mine
+	if type(saved) == "table" then mine = saved[spell] end
+	if mine ~= nil then return mine == true end
+	local starts = ns.ClassDefault("readyAlertOn")
+	if type(starts) ~= "table" then return false end
+	for _, name in ipairs(starts) do
+		if name == spell then return true end
+	end
+	return false
+end
+
+-- Turn one spell's ready alert on or off. True if it changed. The watch
+-- (Alerts.lua) takes the change at once.
+function ns.SetReadyAlert(spell, on)
+	if type(spell) ~= "string" or spell == "" or not HUDiniDB then return false end
+	on = on and true or false
+	if ns.GetReadyAlert(spell) == on then return false end
+	local mine = ns.ClassDB()
+	mine.readyAlerts = type(mine.readyAlerts) == "table" and mine.readyAlerts or {}
+	-- Off saves false, so it wins over the class file's start (D-047).
+	mine.readyAlerts[spell] = on
+	if ns.RefreshReadyAlerts then ns.RefreshReadyAlerts() end
+	return true
+end
+
+--------------------------------------------------------------------------------
+-- Missing items (TICK-0182, D-047)
+--
+-- The class file's missingItem rows: an item you make (make) or need for a
+-- spell (needs). Alerts.lua shows an icon by your health bar, out of a
+-- fight, when your bags hold none. Each row has a choice per class, by its
+-- key:
+--   HUDiniDB.classes[token].missingItem = { manaGem = false }
+-- nil is the class file's on. Off saves false, so it wins over the start.
+--------------------------------------------------------------------------------
+
+-- A row HUDini can use: a key, items, and make or needs.
+function ns.MissingItemValid(row)
+	return type(row) == "table" and type(row.key) == "string" and row.key ~= ""
+		and type(row.items) == "table" and (row.make ~= nil or row.needs ~= nil)
+end
+
+-- The usable rows of your class file, in its order.
+function ns.MissingItemRows()
+	local out, list = {}, ns.ClassDefault("missingItem")
+	if type(list) ~= "table" then return out end
+	for _, row in ipairs(list) do
+		if ns.MissingItemValid(row) then out[#out + 1] = row end
+	end
+	return out
+end
+
+-- True when the row's alert is on: your saved choice, else the row's on.
+-- Makes no table, so the HUD's poll can ask it (Alerts.lua).
+function ns.MissingItemOn(row)
+	if not (HUDiniDB and ns.MissingItemValid(row)) then return false end
+	local saved = ns.ClassDB().missingItem
+	if type(saved) == "table" and saved[row.key] ~= nil then return saved[row.key] == true end
+	return row.on == true
+end
+
+function ns.GetMissingItem(key)
+	for _, row in ipairs(ns.MissingItemRows()) do
+		if row.key == key then return ns.MissingItemOn(row) end
+	end
+	-- A key your class file no longer has: only a saved on counts.
+	local saved = HUDiniDB and ns.ClassDB().missingItem
+	return type(saved) == "table" and saved[key] == true
+end
+
+-- Turn one row's alert on or off. True if it changed. The icon looks again
+-- at once.
+function ns.SetMissingItem(key, on)
+	if type(key) ~= "string" or key == "" or not HUDiniDB then return false end
+	on = on and true or false
+	if ns.GetMissingItem(key) == on then return false end
+	local mine = ns.ClassDB()
+	mine.missingItem = type(mine.missingItem) == "table" and mine.missingItem or {}
+	mine.missingItem[key] = on
+	if ns.UpdateMissingItem then ns.UpdateMissingItem() end
+	return true
+end
+
+--------------------------------------------------------------------------------
+-- Cooldown timer bars (TICK-0158, GitHub #2)
+--
+-- A spell you turn on gets a bar under the HUD while its cooldown runs
+-- (TimerBars.lua). The page offers the same spells as the ready alerts:
+-- the class file's readyAlert list, then any other spell turned on here.
+-- Saved per class:
+--   HUDiniDB.classes[token].timerBars = { ["Name"] = true }
+--------------------------------------------------------------------------------
+
+-- The spells to offer: the class file's list in its order, then any other
+-- spell with a bar on, A to Z. Each once.
+function ns.TimerBarSpells()
+	local out, seen = {}, {}
+	local list = ns.ClassDefault("readyAlert")
+	if type(list) == "table" then
+		for _, name in ipairs(list) do
+			if type(name) == "string" and name ~= "" and not seen[name] then
+				seen[name] = true
+				out[#out + 1] = name
+			end
+		end
+	end
+	local saved = HUDiniDB and ns.ClassDB().timerBars
+	local extra = {}
+	if type(saved) == "table" then
+		for name, on in pairs(saved) do
+			if on == true and type(name) == "string" and name ~= "" and not seen[name] then
+				extra[#extra + 1] = name
+			end
+		end
+	end
+	table.sort(extra)
+	for _, name in ipairs(extra) do out[#out + 1] = name end
+	return out
+end
+
+-- True when this spell name has a timer bar.
+function ns.GetTimerBar(spell)
+	if type(spell) ~= "string" or not HUDiniDB then return false end
+	local saved = ns.ClassDB().timerBars
+	return type(saved) == "table" and saved[spell] == true
+end
+
+-- Turn one spell's timer bar on or off. True if it changed. The bars
+-- (TimerBars.lua) take the change at once; the first bar turns the part on.
+function ns.SetTimerBar(spell, on)
+	if type(spell) ~= "string" or spell == "" or not HUDiniDB then return false end
+	on = on and true or false
+	if ns.GetTimerBar(spell) == on then return false end
+	local mine = ns.ClassDB()
+	mine.timerBars = type(mine.timerBars) == "table" and mine.timerBars or {}
+	mine.timerBars[spell] = on or nil
+	if next(mine.timerBars) == nil then mine.timerBars = nil end
+	if ns.UpdateModules then ns.UpdateModules() end
+	if ns.RefreshTimerBars then ns.RefreshTimerBars() end
 	return true
 end
 

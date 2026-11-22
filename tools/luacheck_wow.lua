@@ -42,7 +42,7 @@ return {
 		-- C_ namespaces
 		"C_ActionBar", "C_AddOns", "C_AssistedCombat", "C_Container", "C_CreatureInfo", "C_CurrencyInfo",
 		"C_GossipInfo", "C_Item", "C_MajorFactions", "C_Minimap", "C_MountJournal",
-		"C_PetJournal", "C_QuestLog", "C_Reputation", "C_Spell", "C_Timer",
+		"C_PetJournal", "C_QuestLog", "C_Reputation", "C_SkillInfo", "C_Spell", "C_Timer",
 		"C_TooltipInfo", "C_ToyBox", "C_TransmogCollection", "C_UnitAuras",
 
 		-- Functions

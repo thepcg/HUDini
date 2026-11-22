@@ -54,6 +54,17 @@
 	   glow: Stoneform for a poison, disease or bleed. The race data is
 	   ns.RACIALS (Classes.lua). The debuff type must be plain: a type the
 	   game hides in a fight lights nothing. No icon on the HUD, no glow.
+
+	9. Your cooldown is ready (TICK-0157, GitHub #1). A spell you turned on
+	   (Classes.lua, ns.SetReadyAlert) plays a sound when its cooldown ends,
+	   and its icon on the HUD glows for a few seconds. Off for every spell
+	   until you turn it on. Only SPELL_UPDATE_COOLDOWN (or, for a spell with
+	   charges, SPELL_UPDATE_CHARGES) can mark a spell "on cooldown": the
+	   game says isOnGCD is only true to trust in that event, and the global
+	   cooldown alone is not the spell's cooldown. While a watched spell is
+	   on cooldown, a 0.5 s ticker looks only for isActive false (ready),
+	   which is safe at any time. No alert at login: a spell counts only
+	   after the game was seen to start its cooldown.
 ----------------------------------------------------------------------------]]
 
 local ADDON, ns = ...
@@ -168,6 +179,25 @@ local function OffCooldown(id)
 	return active == false
 end
 
+-- On the global cooldown only (TICK-0161). The game says isOnGCD is to
+-- trust only inside SPELL_UPDATE_COOLDOWN (SpellSharedDocumentation.lua:30),
+-- so that event notes it for each spell asked about here (Core.lua calls
+-- ns.NoteGlobalCooldowns), and the note stands until the next one. A spell
+-- not noted yet counts as on its own cooldown while isActive is true.
+local gcdAsked = {} -- spell ID -> true, once ReadySoon asked about it
+local gcdOnly = {}  -- spell ID -> true while the last event said "global only"
+
+-- true when you can cast it now or right after the global cooldown: off
+-- cooldown, or on the global cooldown only. false on its own cooldown, nil
+-- when the game does not say.
+local function ReadySoon(id)
+	if not id then return nil end
+	gcdAsked[id] = true
+	local off = OffCooldown(id)
+	if off ~= false then return off end
+	return gcdOnly[id] == true
+end
+
 -- False only when the game plainly says you cannot cast it now: wrong
 -- stance or form, no shield, no rage. An answer the game will not give
 -- counts as usable, so the outline does what it did before it asked.
@@ -184,13 +214,15 @@ local function Usable(id)
 end
 
 -- The interrupt to use now: the class file's spell, or the first of its
--- list, that you know, is off cooldown and you can cast now. nil if none.
+-- list, that you know, is off cooldown (the global cooldown alone does not
+-- count, so the outline does not go out after each spell you cast) and you
+-- can cast now. nil if none.
 local function ReadyInterrupt()
 	local value = ns.ClassValue("interrupt")
 	local list = type(value) == "table" and value or { value }
 	for _, spell in ipairs(list) do
 		local id = Known(spell)
-		if id and OffCooldown(id) == true and Usable(id) then return spell end
+		if id and ReadySoon(id) == true and Usable(id) then return spell end
 	end
 	return nil
 end
@@ -304,12 +336,17 @@ local function KickOutline(holder)
 	return f
 end
 
+-- The target's cast while it runs: { ni = notInterruptible }, or nil. Kept
+-- only to hand on again (ns.NoteGlobalCooldowns); never read.
+local targetCast
+
 -- Called by Bars.lua every time the target cast bar refreshes.
 -- notInterruptible is secret, so it is never read, only handed to the edges.
 function ns.OnTargetCast(notInterruptible, ended)
 	if samples then return end
 	local db = HUDiniDB
 	local outline = KickOutline(ns.casts.targetcast.holder)
+	targetCast = not ended and { ni = notInterruptible } or nil
 
 	if ended or not db.glowOnKickable or not ReadyInterrupt() then
 		outline.pulse:Stop()
@@ -346,21 +383,182 @@ local keepUpIcon, ownBuffIcon
 
 -- Left of your health bar, what is missing (D-027),
 -- growing left from the bar in this order. Each icon sits left of the last
--- shown one before it, so a hidden icon takes no place. No bait goes last:
--- its words sit left of its icon, with no icon past them.
-local LEFT_ORDER = { "keepUp", "ownBuff", "bait" }
+-- shown one before it, so a hidden icon takes no place. A missing item
+-- (TICK-0182) shows out of a fight only, after the buffs. No bait goes last:
+-- its words sit left of its icon, with no icon past them. In a fight the
+-- game's buff watches (Auras.lua, TICK-0168) hold the first spots, in the
+-- same order: these icons start left of them.
+local LEFT_ORDER = { "keepUp", "ownBuff", "item", "bait" }
 local leftIcons = {}
+ns.leftIcons = leftIcons -- read only: the tests tell the icons apart by it
 
 local function SlotLeft(bar)
 	local after = bar
+	local held = ns.BuffWatchSpots and ns.BuffWatchSpots() or 0
+	local skip = held * ((bar:GetHeight() or 0) + 3)
 	for _, key in ipairs(LEFT_ORDER) do
 		local icon = leftIcons[key]
 		if icon then
 			icon:ClearAllPoints()
-			icon:SetPoint("RIGHT", after, "LEFT", -3, 0)
+			icon:SetPoint("RIGHT", after, "LEFT", -3 - (after == bar and skip or 0), 0)
 			if icon:IsShown() then after = icon end
 		end
 	end
+end
+
+-- True when a buff watch shows this buff's icon in the fight (Auras.lua).
+local function Watched(key)
+	return key ~= nil and ns.BuffWatched ~= nil and ns.BuffWatched(key) == true
+end
+
+-- The alert sounds the player picks from (D-043, TICK-0167), in menu order:
+-- the game's own sound kits (SOUNDKIT, SoundKitConstants.lua), old enough
+-- to be in WoW Forever's data. HUDini ships no sound. The cooldown viewer's
+-- kits (353392, 353397) are not: PlaySound returns nothing for them there
+-- (DK's test, 2026-11-21). The names are the locale's "sound.<key>".
+-- The third value is the kit's one sound file (the game's SoundKitEntry
+-- table, by wago.tools): the game's buff-end sound takes a file, not a
+-- kit (C_UnitAuras.AddAuraSound, Auras.lua, TICK-0168).
+local ALERT_SOUNDS = {
+	{ "readyCheck",   8960, 567478 }, -- READY_CHECK
+	{ "raidWarning",  8959, 567397 }, -- RAID_WARNING
+	{ "mapPing",      3175, 567416 }, -- MAP_PING
+	{ "whisper",      3081, 567421 }, -- TELL_MESSAGE
+	{ "bossEmote",   12197, 567394 }, -- RAID_BOSS_EMOTE_WARNING
+	{ "alarmClock",  12867, 567399 }, -- ALARM_CLOCK_WARNING_2
+	{ "pvpQueue",     8459, 568011 }, -- PVP_THROUGH_QUEUE
+	{ "coins",         120, 567428 }, -- LOOT_WINDOW_COIN_SOUND
+}
+local soundKit, soundFile, soundKeys = {}, {}, {}
+for i, s in ipairs(ALERT_SOUNDS) do
+	soundKeys[i], soundKit[s[1]], soundFile[s[1]] = s[1], s[2], s[3]
+end
+-- Two defaults that differ, so good news and a warning are told apart.
+ns.READY_SOUND_DEFAULT   = "readyCheck"
+ns.MISSING_SOUND_DEFAULT = "raidWarning"
+-- DK heard it play on WoW Forever: the last try when a pick will not play.
+local LAST_SOUND = 8959
+
+-- The keys in menu order (a copy).
+function ns.AlertSounds()
+	local keys = {}
+	for i, key in ipairs(soundKeys) do keys[i] = key end
+	return keys
+end
+
+-- Plays key's sound once on the Master channel, so it plays with Sound
+-- Effects turned down. If the client cannot play it, then default's, then
+-- LAST_SOUND. The kit ID played, or nil. The option rows call it once on a
+-- pick (a preview), so it never skips a call.
+function ns.PlayAlertSound(key, default)
+	local kits, added = {}, {}
+	for _, kit in ipairs({ soundKit[key] or false, soundKit[default] or false, LAST_SOUND }) do
+		if kit and not added[kit] then
+			added[kit] = true
+			kits[#kits + 1] = kit
+		end
+	end
+	return ns.PlaySoundFirst(kits, "Master") -- locale: skip the game's sound channel
+end
+
+-- The ready alert's sound, one for every spell of the class: the saved key,
+-- or the default when none is saved or the key left the list.
+function ns.GetReadySound()
+	local key = HUDiniDB and ns.ClassDB().readySound
+	if soundKit[key] then return key end
+	return ns.READY_SOUND_DEFAULT
+end
+
+-- True if it changed. A key not in the list changes nothing.
+function ns.SetReadySound(key)
+	if not (HUDiniDB and soundKit[key]) then return false end
+	local db = ns.ClassDB()
+	local want = key ~= ns.READY_SOUND_DEFAULT and key or nil
+	if db.readySound == want then return false end
+	db.readySound = want
+	return true
+end
+
+-- Which red icon is on in a fight now. The sound plays once when the first
+-- turns on, and again only after both went off. An icon turns on only for
+-- "surely off" (an unreadable aura counts as on), so a secret read is
+-- silent. A buff missing before the fight sounds when the fight starts (the
+-- alerts look again then); one that ends in the fight sounds when its icon
+-- turns on, which needs a sign the game gives (TICK-0164 slot hooks).
+-- A buff that leaves you in a fight while the game plays its own sound for
+-- it (ns.GameSounds, Auras.lua, TICK-0168) gets none from HUDini: one
+-- sound, not two.
+local missingOn = { keepUp = false, ownBuff = false }
+local missingSounded = false
+
+-- Saved per class as keepUpSound: false off, true on with the default
+-- (TICK-0163 saves), a key on with that sound. Nothing saved: on with the
+-- default when the class file says keepUpSoundOn (D-047), else off. Off
+-- saves false, so it wins over that start (TICK-0181). No migration: an
+-- Off from before TICK-0181 saved nothing, so it reads as the start.
+local function KeepUpSaved()
+	local saved = ns.ClassDB().keepUpSound
+	if saved == nil and ns.ClassDefault and ns.ClassDefault("keepUpSoundOn") == true then
+		return true
+	end
+	return saved
+end
+
+function ns.GetKeepUpSound()
+	if not HUDiniDB then return false end
+	local saved = KeepUpSaved()
+	return saved == true or type(saved) == "string"
+end
+
+-- "off", or the key of the sound that plays (the default for true or for a
+-- key that left the list).
+function ns.GetKeepUpSoundChoice()
+	if not ns.GetKeepUpSound() then return "off" end
+	local saved = KeepUpSaved()
+	if soundKit[saved] then return saved end
+	return ns.MISSING_SOUND_DEFAULT
+end
+
+-- true (on, the sound kept), false or "off", or a key. True if it changed;
+-- a key not in the list changes nothing.
+function ns.SetKeepUpSound(choice)
+	if not HUDiniDB then return false end
+	local db = ns.ClassDB()
+	local want
+	if choice == true then
+		want = ns.GetKeepUpSound() and KeepUpSaved() or true
+	elseif choice == false or choice == nil or choice == "off" then
+		want = false
+	elseif soundKit[choice] then
+		want = choice ~= ns.MISSING_SOUND_DEFAULT and choice or true
+	else
+		return false
+	end
+	if db.keepUpSound == want then return false end
+	db.keepUpSound = want
+	-- The game's sound for a buff that ends in a fight follows now, not at
+	-- the next aura change: a fight can start first (TICK-0168).
+	if ns.SyncBuffWatches then pcall(ns.SyncBuffWatches) end
+	return true
+end
+
+-- The sound file the game plays when a buff leaves you in a fight, or nil
+-- with the sound off.
+function ns.MissingSoundFile()
+	if not ns.GetKeepUpSound() then return nil end
+	return soundFile[ns.GetKeepUpSoundChoice()] or soundFile[ns.MISSING_SOUND_DEFAULT]
+end
+
+-- buff: the buff the icon shows (a buff name, or ns.KEEP_UP_KEY for the
+-- list), for ns.GameSounds.
+local function MissingSound(key, on, buff)
+	missingOn[key] = on and true or false
+	local any = missingOn.keepUp or missingOn.ownBuff
+	local byGame = on and buff ~= nil and ns.GameSounds ~= nil and ns.GameSounds(buff)
+	if any and not missingSounded and ns.GetKeepUpSound() and not byGame then
+		ns.PlayAlertSound(ns.GetKeepUpSoundChoice(), ns.MISSING_SOUND_DEFAULT)
+	end
+	missingSounded = any
 end
 
 local function KeepUpIcon(bar)
@@ -371,6 +569,24 @@ local function KeepUpIcon(bar)
 		leftIcons.keepUp = keepUpIcon
 	end
 	return keepUpIcon
+end
+
+-- True when the own-buff icon (alert 7) shows a spell of the keep-up list.
+-- The same buff can be both: a class pick of Lightning Shield, a buff
+-- HUDini learned too (TICK-0166). One icon is enough, and the own-buff
+-- icon knows more in a fight (the slot sign, TICK-0164), so it wins.
+local function OwnBuffCovers(keepUp)
+	local db = HUDiniDB
+	local id = db.warnOwnBuff and db.showHealth and ns.missingBuffID
+	if not id then return false end
+	local name = Plain(C_Spell.GetSpellName(id))
+	if type(name) ~= "string" then return false end
+	for _, spell in ipairs(keepUp) do
+		local listed = spell
+		if type(spell) == "number" then listed = Plain(C_Spell.GetSpellName(spell)) end
+		if listed == name then return true end
+	end
+	return false
 end
 
 local function UpdateKeepUpIcon()
@@ -391,14 +607,17 @@ local function UpdateKeepUpIcon()
 		and db.showHealth
 		and off
 		and InCombat()
+		and not OwnBuffCovers(keepUp)
 
 	if want then
 		local h = bar:GetHeight()
 		keepUpIcon:SetSize(h, h)
 		keepUpIcon.tex:SetTexture(C_Spell.GetSpellTexture(spellID) or 134400)
 	end
-	keepUpIcon:SetShown((want and bar:IsShown()) and true or false)
+	-- A watch shows it in a fight: one icon. The sound still counts it.
+	keepUpIcon:SetShown((want and bar:IsShown() and not Watched(ns.KEEP_UP_KEY)) and true or false)
 	SlotLeft(bar)
+	MissingSound("keepUp", want, ns.KEEP_UP_KEY)
 end
 
 --------------------------------------------------------------------------------
@@ -429,8 +648,14 @@ local function UpdateOwnBuffIcon()
 		ownBuffIcon:SetSize(h, h)
 		ownBuffIcon.tex:SetTexture(C_Spell.GetSpellTexture(spellID) or 134400)
 	end
-	ownBuffIcon:SetShown(spellID ~= nil)
+	local buff = spellID and Plain(C_Spell.GetSpellName(spellID))
+	if type(buff) ~= "string" then buff = nil end
+	-- A watch shows it in a fight: one icon. The sound and the glow still
+	-- count it.
+	ownBuffIcon:SetShown(spellID ~= nil and not Watched(buff))
 	SlotLeft(bar)
+	-- The icon shows out of a fight too; the sound is for a fight only.
+	MissingSound("ownBuff", spellID ~= nil and InCombat(), buff)
 	-- The HUD icon of that spell glows while this shows (D-035, TICK-0150),
 	-- with the proc glow setting off too. ns.missingBuffID is the grid
 	-- entry's own spell ID when the spell is on the grid (Auras.lua
@@ -439,7 +664,12 @@ local function UpdateOwnBuffIcon()
 	if ns.HUDini and ns.HUDini.SetAlertGlow then ns.HUDini:SetAlertGlow("ownBuff", spellID) end
 end
 
-ns.UpdateOwnBuffIcon = UpdateOwnBuffIcon
+-- Auras.lua calls this when ns.missingBuffID may have changed: the
+-- keep-up icon looks again too, as it steps aside for the same spell.
+ns.UpdateOwnBuffIcon = function()
+	UpdateOwnBuffIcon()
+	if HUDiniDB and not samples then UpdateKeepUpIcon() end
+end
 
 --------------------------------------------------------------------------------
 -- 2b. No bait: a fishing pole with nothing on it, left of the health bar
@@ -489,6 +719,154 @@ local function BaitWanted()
 	return (db and db.warnNoBait and db.showHealth
 		and ns.HoldsFishingPole and ns.HoldsFishingPole()) and true or false
 end
+
+--------------------------------------------------------------------------------
+-- 2c. Missing item: an item you make or need is not in your bags
+--     (TICK-0182, D-047), left of the health bar, out of a fight only
+--
+-- The class file's missingItem rows (Classes.lua). A row counts when its
+-- choice is on and you know its spell: make (the spell that makes it), or
+-- one of needs (spells that use it). The icon shows the first such row, in
+-- class file order, whose items your bags hold none of and whose buff (if
+-- it has one) is not on you. A count or a buff the game will not give
+-- counts as "you have it", so an unreadable bag never raises a false alarm.
+-- Bags: BAG_UPDATE_DELAYED. Spells, the fight's start and end, and auras
+-- call ns.UpdateAlerts.
+--------------------------------------------------------------------------------
+
+local itemIcon
+
+local function ItemIcon(bar)
+	if not itemIcon then
+		itemIcon = CreateAlertIcon(bar, MISSING_COLOR)
+		leftIcons.item = itemIcon
+	end
+	return itemIcon
+end
+
+-- The ID of the row's spell you know, or nil: make, else the first of needs.
+local function RowKnown(row)
+	if row.make ~= nil then return Known(row.make) end
+	if type(row.needs) == "table" then return FirstKnown(row.needs) end
+	return Known(row.needs)
+end
+ns.MissingItemKnown = RowKnown
+
+-- How many of one item your bags hold, or nil when the game will not say.
+-- C_Item.GetItemCount(id, includeBank, includeUses, includeReagentBank), as
+-- FeedLoot.lua asks it.
+local function ItemCount(id)
+	local get = C_Item and C_Item.GetItemCount
+	if not get then return nil end
+	local ok, n = pcall(get, id, false, false, true)
+	n = ok and Plain(n) or nil
+	return type(n) == "number" and n or nil
+end
+
+-- true when the bags hold one of the row's items, or the game will not say.
+local function HasItem(row)
+	for _, id in ipairs(row.items) do
+		local n = ItemCount(id)
+		if n == nil or n > 0 then return true end
+	end
+	return false
+end
+
+-- true when the buff is on you, or the game will not say. Asked out of a
+-- fight only, where your auras read.
+local function BuffOn(name)
+	if name == nil then return false end
+	local auras = C_UnitAuras
+	if not (auras and auras.GetAuraDataBySpellName) then return true end
+	local ok, aura = pcall(auras.GetAuraDataBySpellName, "player", name, "HELPFUL")
+	if not ok or ns.IsSecret(aura) then return true end
+	return aura ~= nil
+end
+
+-- The row to show now and its known spell's ID, or nil. Out of a fight,
+-- with the health bar on. makeOnly: only a row you make (for the wake).
+-- Makes no table: the HUD's poll asks it through ns.MissingItemWake.
+local function MissingRow(makeOnly)
+	local db = HUDiniDB
+	if not (db and db.showHealth) or InCombat() then return nil end
+	local list = ns.ClassDefault and ns.ClassDefault("missingItem")
+	if type(list) ~= "table" then return nil end
+	for _, row in ipairs(list) do
+		if (not makeOnly or (type(row) == "table" and row.make ~= nil))
+			and ns.MissingItemOn(row) then
+			local id = RowKnown(row)
+			if id and not HasItem(row) and not BuffOn(row.buff) then return row, id end
+		end
+	end
+	return nil
+end
+
+-- The game's name for the row's item: the first of its IDs the game names.
+-- nil while the game has not loaded any (it is asked to).
+function ns.MissingItemName(row)
+	local get = C_Item and C_Item.GetItemNameByID
+	if not (get and type(row) == "table" and type(row.items) == "table") then return nil end
+	for _, id in ipairs(row.items) do
+		local ok, name = pcall(get, id)
+		name = ok and Plain(name) or nil
+		if type(name) == "string" and name ~= "" then return name end
+	end
+	local load = C_Item.RequestLoadItemDataByID
+	if load then
+		for _, id in ipairs(row.items) do pcall(load, id) end
+	end
+	return nil
+end
+
+-- The item's own icon, else the spell's, else the question mark.
+local function RowTexture(row, spellID)
+	local get = C_Item and C_Item.GetItemIconByID
+	if get and row.items[1] then
+		local ok, tex = pcall(get, row.items[1])
+		tex = ok and Plain(tex) or nil
+		if tex then return tex end
+	end
+	return (spellID and Plain(C_Spell.GetSpellTexture(spellID))) or 134400
+end
+
+local function UpdateItemIcon()
+	if samples or not HUDiniDB then return end
+	local bar = ns.GetBar("health")
+	ItemIcon(bar)
+	local row, id = MissingRow(false)
+	if row then
+		local h = bar:GetHeight()
+		itemIcon:SetSize(h, h)
+		itemIcon.tex:SetTexture(RowTexture(row, id))
+	end
+	itemIcon:SetShown((row and bar:IsShown()) and true or false)
+	SlotLeft(bar)
+end
+ns.UpdateMissingItem = UpdateItemIcon
+
+-- Core.lua shows the HUD for it, so its icon is seen while idle: a row you
+-- make is missing, and you can cast its spell now. A row you need for a
+-- spell never wakes the HUD, so hide when idle still works with no shards.
+function ns.MissingItemWake()
+	local row, id = MissingRow(true)
+	return row ~= nil and UsableAnswer(id) == true
+end
+
+-- Your bags changed. At login, ask the game to load the items' names, for
+-- the setup page and Options. Bags are heard from the first
+-- PLAYER_ENTERING_WORLD on, as Core and the alerts frame do: a bag event
+-- on the login screen must not build the health bar before the HUD.
+local itemEvents = CreateFrame("Frame")
+pcall(itemEvents.RegisterEvent, itemEvents, "PLAYER_ENTERING_WORLD")
+itemEvents:SetScript("OnEvent", function(self, event)
+	if event == "PLAYER_ENTERING_WORLD" then
+		pcall(self.RegisterEvent, self, "BAG_UPDATE_DELAYED")
+		for _, row in ipairs(ns.MissingItemRows and ns.MissingItemRows() or {}) do
+			ns.MissingItemName(row)
+		end
+	end
+	UpdateItemIcon()
+end)
 
 --------------------------------------------------------------------------------
 -- 3. Dispel: tint the power bar with the debuff type's colour
@@ -562,17 +940,11 @@ end
 -- 8. Racial ability: its icon glows while it can help
 --------------------------------------------------------------------------------
 
--- Ready to cast: off cooldown, or on the global cooldown only, so the glow
--- does not blink off after each spell you cast. Both fields are plain
--- (SpellCooldownInfo isActive and isOnGCD, NeverSecret in
--- SpellSharedDocumentation.lua:26, :30). false when the game does not say.
+-- Ready to cast: off cooldown, or on the global cooldown only (ReadySoon),
+-- so the glow does not blink off after each spell you cast. false when the
+-- game does not say.
 local function RacialReady(id)
-	local ok, info = pcall(C_Spell.GetSpellCooldown, id)
-	if not ok or type(info) ~= "table" then return false end
-	local active = Plain(info.isActive)
-	if active == nil then return false end
-	if active and Plain(info.isOnGCD) ~= true then return false end
-	return Usable(id)
+	return ReadySoon(id) == true and Usable(id)
 end
 
 -- True when a debuff of one of these types is on you and the game shows
@@ -609,6 +981,83 @@ end
 ns.UpdateRacialGlow = function()
 	if not HUDiniDB or samples then return end
 	UpdateRacialGlow()
+end
+
+-- The spells asked about from the first event on, so the first ask in a
+-- global cooldown finds a note: each interrupt you know, and your racial.
+local function SeedAsked()
+	local value = ns.ClassValue("interrupt")
+	for _, spell in ipairs(type(value) == "table" and value or { value }) do
+		local id = Known(spell)
+		if id then gcdAsked[id] = true end
+	end
+	local racial = ns.RacialAlert and ns.RacialAlert()
+	local id = racial and Known(racial)
+	if id then gcdAsked[id] = true end
+end
+
+local function CooldownInfo(id)
+	local ok, info = pcall(C_Spell.GetSpellCooldown, id)
+	if not ok or type(info) ~= "table" then return nil, nil end
+	return Plain(info.isActive), Plain(info.isOnGCD)
+end
+
+-- The outline on a target's cast looks again with the notes as they are.
+-- A target cast bar hidden with no "ended" (target cleared, the bar off)
+-- drops the cast here.
+local function OutlineAgain()
+	if not targetCast or not HUDiniDB or samples then return end
+	local cast = ns.casts and ns.casts.targetcast
+	if not (HUDiniDB.showTargetCast and cast and cast.holder:IsShown()) then
+		targetCast = nil
+		if kickOutline then
+			kickOutline.pulse:Stop()
+			kickOutline:Hide()
+		end
+		return
+	end
+	ns.OnTargetCast(targetCast.ni)
+end
+
+-- A shared cooldown (Flame Shock starts Earth Shock's) can land a frame
+-- after the event, with no event of its own. One frame later, a spell noted
+-- "global only" that now reads as anything else loses its note. The look
+-- only takes notes away: isOnGCD out of the event is never trusted to say
+-- "ready".
+local lateDue = false
+local function LateLook()
+	lateDue = false
+	local changed = false
+	for id in pairs(gcdOnly) do
+		local active, gcd = CooldownInfo(id)
+		if not (active == true and gcd == true) then
+			gcdOnly[id] = nil
+			changed = true
+		end
+	end
+	if changed and HUDiniDB and not samples then
+		OutlineAgain()
+		UpdateRacialGlow()
+	end
+end
+
+-- Core.lua calls this inside SPELL_UPDATE_COOLDOWN, the one place isOnGCD
+-- is to trust: note it for each spell ReadySoon asked about. Both fields
+-- are plain (SpellCooldownInfo isActive and isOnGCD, NeverSecret in
+-- SpellSharedDocumentation.lua:26, :30). Then the outline on a target's
+-- cast looks again: Bars.lua asks only when the cast starts, and your
+-- interrupt can come off cooldown, or go on it, while the cast runs.
+function ns.NoteGlobalCooldowns()
+	SeedAsked()
+	for id in pairs(gcdAsked) do
+		local active, gcd = CooldownInfo(id)
+		gcdOnly[id] = (active == true and gcd == true) or nil
+	end
+	OutlineAgain()
+	if next(gcdOnly) and not lateDue then
+		lateDue = true
+		C_Timer.After(0, LateLook)
+	end
 end
 
 --------------------------------------------------------------------------------
@@ -700,13 +1149,15 @@ local function CanCastOnOthers(spellID)
 end
 
 -- True when the target has any of the buffs, false when none, nil when the
--- game will not say.
+-- game will not say. Not found while auras are hidden (some maps, PvP) is
+-- "will not say": a hidden aura is not found by name (TICK-0161).
 local function TargetHasAny(names)
 	for _, name in ipairs(names) do
 		local ok, data = pcall(C_UnitAuras.GetAuraDataBySpellName, "target", name, "HELPFUL")
 		if not ok then return nil end
 		if data ~= nil then return true end
 	end
+	if ns.AurasHidden and ns.AurasHidden() then return nil end
 	return false
 end
 
@@ -853,6 +1304,17 @@ local function ShowSamples(db)
 	local keepUp = KeepUpIcon(health)
 	keepUp:Hide()
 	if db.warnKeepUp and db.showHealth then SampleIcon(keepUp, health, SAMPLE_TEXTURES.keepUp) end
+	-- A missing item: your class file's first row that is on (TICK-0182).
+	local item = ItemIcon(health)
+	item:Hide()
+	if db.showHealth then
+		for _, row in ipairs(ns.MissingItemRows and ns.MissingItemRows() or {}) do
+			if ns.MissingItemOn(row) then
+				SampleIcon(item, health, RowTexture(row))
+				break
+			end
+		end
+	end
 	local bait = BaitIcon(health)
 	bait:Hide()
 	if db.warnNoBait and db.showHealth then SampleIcon(bait, health, BAIT_ICON) end
@@ -894,6 +1356,295 @@ function ns.ShowAlertSamples(on)
 end
 
 --------------------------------------------------------------------------------
+-- 9. Cooldown ready: a sound and a glow when a cooldown you watch ends
+--------------------------------------------------------------------------------
+
+-- The sound is the player's pick for the class (ns.GetReadySound, section 2,
+-- D-043), default the ready check.
+-- Seconds the icon glows. Not until you cast it: a ready spell you keep for
+-- later would then hold the HUD awake (ShouldShow) and defeat hide when idle.
+local READY_GLOW_TIME = 5
+
+local watchIDs   = {} -- spell ID the game uses now -> name, for each spell you turned on and know
+local baseIDs    = {} -- that ID -> the ID you know, when an override replaces it
+local onCooldown = {} -- spell ID -> GetTime() when an event saw its cooldown start
+local lateStart  = {} -- spell ID -> true when only the look one frame later saw that start
+local readyLit   = {} -- spell ID -> GetTime() when its glow went on
+local litBase    = {} -- spell ID -> the base ID lit with it, while it glows
+
+-- No watched cooldown is this short. A start that only the look one frame
+-- later saw read isOnGCD outside its event (SpellSharedDocumentation.lua:30);
+-- if that "cooldown" ends sooner, it was a global cooldown read as the
+-- spell's own, and it ends with no sound. A start seen in the event is
+-- real, so a reset soon after it (Cold Snap) still rings.
+local MIN_COOLDOWN = 3
+
+-- The ID the game uses now for a spell you know: its override (a talent or
+-- form can replace one spell with another, C_Spell.GetOverrideSpell, which
+-- returns the ID itself when there is none) or the spell itself.
+local function EffectiveID(id)
+	local get = C_Spell.GetOverrideSpell
+	if not get then return id end
+	local ok, over = pcall(get, id)
+	over = ok and Plain(over) or nil
+	if type(over) == "number" and over > 0 then return over end
+	return id
+end
+
+-- The plain charge info of a spell with two or more charges, or nil. Its
+-- isActive is true while a charge is coming back (NeverSecret,
+-- SpellSharedDocumentation.lua:6-15).
+local function ChargeInfo(id)
+	if not C_Spell.GetSpellCharges then return nil end
+	local ok, info = pcall(C_Spell.GetSpellCharges, id)
+	if not ok or type(info) ~= "table" then return nil end
+	local max = Plain(info.maxCharges)
+	if type(max) ~= "number" or max < 2 then return nil end
+	return info
+end
+
+-- True while a school lockout holds the spell. An interrupted cast locks
+-- every spell of its school, and the game shows that as a cooldown on each.
+-- Its own info says so plainly (SpellLossOfControlInfo.isActive,
+-- NeverSecret, SpellSharedDocumentation.lua). A secret answer is unknown:
+-- treated as locked, so it is never a start.
+local function LockedOut(id)
+	local get = C_Spell.GetSpellLossOfControlCooldownInfo
+	if not get then return false end
+	local ok, info = pcall(get, id)
+	if not ok or type(info) ~= "table" then return false end
+	local active = info.isActive
+	if IsSecret(active) then return true end
+	return active == true
+end
+
+-- Only in SPELL_UPDATE_COOLDOWN or SPELL_UPDATE_CHARGES (and its look one
+-- frame later): true when the spell's own cooldown runs. The global
+-- cooldown alone is false, and so are a school lockout and a secret or
+-- missing answer: unknown is never "on cooldown".
+local function CooldownStarted(id)
+	if LockedOut(id) then return false end
+	local charges = ChargeInfo(id)
+	if charges then return Plain(charges.isActive) == true end
+	local ok, info = pcall(C_Spell.GetSpellCooldown, id)
+	if not ok or type(info) ~= "table" then return false end
+	if Plain(info.isActive) ~= true then return false end
+	local gcd = info.isOnGCD
+	if IsSecret(gcd) then return false end
+	-- DK's probe log: with isActive true, isOnGCD is always true or false;
+	-- nil came only with isActive false.
+	return gcd == false
+end
+
+-- Safe at any time: true when the game plainly says the spell is ready
+-- again (isActive false). A spell with charges is ready when every charge
+-- is back. A secret or missing answer is not ready.
+local function ReadyAgain(id)
+	local charges = ChargeInfo(id)
+	if charges then return Plain(charges.isActive) == false end
+	return OffCooldown(id) == true
+end
+
+-- Only in the event: true when the spell's own cooldown is over and only
+-- the global cooldown is left on it (isOnGCD true). DK's probe log
+-- (TICK-0156) shows this when a cooldown ends during other casts; the
+-- ticker would see it only after the global cooldown.
+local function OnlyGCDLeft(id)
+	if ChargeInfo(id) then return false end
+	local ok, info = pcall(C_Spell.GetSpellCooldown, id)
+	if not ok or type(info) ~= "table" then return false end
+	return Plain(info.isActive) == true and Plain(info.isOnGCD) == true
+end
+
+-- The same reads for the timer bars (TimerBars.lua, TICK-0158), so both
+-- parts agree on when a cooldown starts and ends.
+ns.CooldownReads = {
+	EffectiveID     = EffectiveID,
+	ChargeInfo      = ChargeInfo,
+	CooldownStarted = CooldownStarted,
+	ReadyAgain      = ReadyAgain,
+	OnlyGCDLeft     = OnlyGCDLeft,
+}
+
+-- True when a HUD icon shows the spell (its ID now, or the base ID).
+local function OnHUD(id)
+	local hud = ns.HUDini
+	local spells = hud and hud.spells
+	if type(spells) ~= "table" then return false end
+	local base = litBase[id]
+	for _, e in ipairs(spells) do
+		if e.spellID == id or (base and e.spellID == base) then return true end
+	end
+	return false
+end
+
+-- True while a ready glow is on a HUD icon: ShouldShow (Core.lua) wakes the
+-- HUD. A watched spell with no icon only rings: there is no glow to see.
+function ns.ReadyGlowLit()
+	for id in pairs(readyLit) do
+		if OnHUD(id) then return true end
+	end
+	return false
+end
+
+-- One source per spell, so two spells ready at once both glow. The base ID
+-- glows too, for an icon that shows the spell by the ID you know.
+local function Glow(id, base, on)
+	if not (ns.HUDini and ns.HUDini.SetAlertGlow) then return end
+	ns.HUDini:SetAlertGlow("cooldown:" .. id, on and id or nil)
+	if base then ns.HUDini:SetAlertGlow("cooldown_base:" .. id, on and base or nil) end
+end
+
+local function Unlight(id)
+	if not readyLit[id] then return end
+	readyLit[id] = nil
+	local base = litBase[id]
+	litBase[id] = nil
+	Glow(id, base, false)
+end
+
+local function Ready(id)
+	local since, late = onCooldown[id], lateStart[id]
+	onCooldown[id], lateStart[id] = nil, nil
+	if late and since and GetTime() - since < MIN_COOLDOWN then return end
+	ns.PlayAlertSound(ns.GetReadySound(), ns.READY_SOUND_DEFAULT)
+	-- readyLit first: SetAlertGlow asks ShouldShow at once.
+	readyLit[id] = GetTime()
+	litBase[id] = baseIDs[id]
+	Glow(id, litBase[id], true)
+end
+
+local readyTicker
+local function SetReadyTicker()
+	readyTicker:Set(next(onCooldown) ~= nil or next(readyLit) ~= nil)
+end
+
+-- The ticker never marks a spell "on cooldown": it only finds the end, and
+-- puts out a glow when its time is up.
+readyTicker = ns.Ticker(0.5, function()
+	for id in pairs(onCooldown) do
+		if ReadyAgain(id) then Ready(id) end
+	end
+	local now = GetTime()
+	for id, since in pairs(readyLit) do
+		if now - since >= READY_GLOW_TIME then Unlight(id) end
+	end
+	SetReadyTicker()
+end)
+
+-- The event reads every watched spell, not only the event's spell ID: a
+-- cast can start the cooldown of another rank, and the ID may be secret.
+-- SPELL_UPDATE_CHARGES says nothing about isOnGCD, so it reads only the
+-- spells with charges.
+-- late: the look one frame later, outside the event, where isOnGCD can be
+-- wrong. It only finds starts, and puts out no glow: a misread start there
+-- must not end a glow you can see. Its only end is the safe ReadyAgain.
+local function OnCooldownEvent(event, late)
+	local chargesOnly = event == "SPELL_UPDATE_CHARGES"
+	for id in pairs(watchIDs) do
+		if not chargesOnly or ChargeInfo(id) then
+			if not onCooldown[id] then
+				if CooldownStarted(id) then
+					onCooldown[id] = GetTime()
+					if late then
+						lateStart[id] = true
+					else
+						-- Cast again while it glowed: the glow has done its job.
+						Unlight(id)
+					end
+				end
+			elseif ReadyAgain(id) or (not late and OnlyGCDLeft(id)) then
+				Ready(id)
+			end
+		end
+	end
+	SetReadyTicker()
+end
+
+-- Rebuild the watch from your choices: a spell you turned off, or no longer
+-- know, drops out with its glow. A spell whose ID changed (a new override)
+-- keeps its "on cooldown", so its end still rings.
+function ns.RefreshReadyAlerts()
+	local was, wasLate = {}, {}
+	for id, since in pairs(onCooldown) do
+		if watchIDs[id] then
+			was[watchIDs[id]] = since
+			wasLate[watchIDs[id]] = lateStart[id]
+		end
+	end
+	wipe(watchIDs)
+	wipe(baseIDs)
+	wipe(onCooldown)
+	wipe(lateStart)
+	if HUDiniDB and ns.ClassToken() then
+		-- Your saved choices, and the class file's spells that start on
+		-- (D-047): ns.GetReadyAlert says which are on. One you do not know
+		-- yet makes no sound; SPELLS_CHANGED looks again when you learn it.
+		local names = {}
+		local saved = ns.ClassDB().readyAlerts
+		if type(saved) == "table" then
+			for name in pairs(saved) do names[name] = true end
+		end
+		local starts = ns.ClassDefault and ns.ClassDefault("readyAlertOn")
+		if type(starts) == "table" then
+			for _, name in ipairs(starts) do
+				if type(name) == "string" then names[name] = true end
+			end
+		end
+		for name in pairs(names) do
+			local known = ns.GetReadyAlert(name) and Known(name)
+			if known then
+				local id = EffectiveID(known)
+				watchIDs[id] = name
+				if id ~= known then baseIDs[id] = known end
+				onCooldown[id] = was[name]
+				lateStart[id] = wasLate[name]
+			end
+		end
+	end
+	for id in pairs(readyLit) do
+		if not watchIDs[id] then Unlight(id) end
+	end
+	SetReadyTicker()
+end
+
+-- True when a watched spell's override changed with no SPELLS_CHANGED (a
+-- form or a proc can swap it): the watch reads stale IDs until rebuilt.
+local function OverrideMoved()
+	for id in pairs(watchIDs) do
+		if EffectiveID(baseIDs[id] or id) ~= id then return true end
+	end
+	return false
+end
+
+-- A shared cooldown (Earth Shock starts Flame Shock's) fires no event of
+-- its own and can land after the event: look at every watched spell again
+-- on the next frame, for starts only (OnCooldownEvent, late).
+local recheckDue = false
+local function Recheck()
+	recheckDue = false
+	OnCooldownEvent("SPELL_UPDATE_COOLDOWN", true)
+end
+
+local readyEvents = CreateFrame("Frame")
+pcall(readyEvents.RegisterEvent, readyEvents, "PLAYER_ENTERING_WORLD")
+pcall(readyEvents.RegisterEvent, readyEvents, "SPELLS_CHANGED")
+pcall(readyEvents.RegisterEvent, readyEvents, "SPELL_UPDATE_COOLDOWN")
+pcall(readyEvents.RegisterEvent, readyEvents, "SPELL_UPDATE_CHARGES")
+readyEvents:SetScript("OnEvent", function(_, event)
+	if event == "PLAYER_ENTERING_WORLD" or event == "SPELLS_CHANGED" then
+		ns.RefreshReadyAlerts()
+		return
+	end
+	if OverrideMoved() then ns.RefreshReadyAlerts() end
+	OnCooldownEvent(event)
+	if event == "SPELL_UPDATE_COOLDOWN" and next(watchIDs) and not recheckDue then
+		recheckDue = true
+		C_Timer.After(0, Recheck)
+	end
+end)
+
+--------------------------------------------------------------------------------
 -- Wiring
 --------------------------------------------------------------------------------
 
@@ -905,6 +1656,7 @@ function ns.UpdateAlerts()
 	UpdateRacialGlow()
 	UpdatePurgeable()
 	UpdateTargetBuffIcon()
+	UpdateItemIcon()
 	UpdateBaitIcon()
 	baitTicker:Set(BaitWanted())
 	targetTicker:Set(TargetTickerWanted())
@@ -947,6 +1699,37 @@ function ns.ReportAlerts(out)
 	out("  Dispel spells known                   " .. count)
 	out("  Dispellable debuff on you now         " .. dispelNow)
 	out("  Purge spell known                     " .. Mark(purgeID))
+	local watched = {}
+	for id, name in pairs(watchIDs) do
+		watched[#watched + 1] = name .. (onCooldown[id] and " (on cooldown)" or "")
+			.. (readyLit[id] and " (glowing)" or "")
+	end
+	table.sort(watched)
+	out("  Cooldown ready alerts                 " .. (#watched > 0 and table.concat(watched, ", ") or "none"))
+	-- Missing items (TICK-0182): each row, and each item ID with the game's
+	-- name for it and the count in your bags. A name proves the ID.
+	local rows = ns.MissingItemRows and ns.MissingItemRows() or {}
+	out("  Missing item rows                     " .. #rows)
+	for _, row in ipairs(rows) do
+		local spell = row.make or (type(row.needs) == "table" and table.concat(row.needs, ", ")) or row.needs
+		out("    " .. row.key .. ": " .. (row.make and "make " or "needs ") .. tostring(spell)
+			.. ", known " .. Mark(RowKnown(row)) .. ", on " .. Mark(ns.MissingItemOn(row))
+			.. (row.buff and (", buff " .. tostring(row.buff) .. " on " .. Mark(BuffOn(row.buff))) or ""))
+		for _, id in ipairs(row.items) do
+			local name
+			local get = C_Item and C_Item.GetItemNameByID
+			if get then
+				local okName, got = pcall(get, id)
+				name = okName and Plain(got) or nil
+			end
+			if type(name) ~= "string" or name == "" then
+				name = "|cffff9933no name: a wrong ID, or not loaded yet (ask again)|r"
+				if C_Item and C_Item.RequestLoadItemDataByID then pcall(C_Item.RequestLoadItemDataByID, id) end
+			end
+			out("      item " .. tostring(id) .. ": " .. name .. ", in bags " .. tostring(ItemCount(id) or "cannot tell"))
+		end
+	end
+	out("  Missing item icon now                 " .. Mark(itemIcon and itemIcon:IsShown()))
 	-- locale: end
 end
 

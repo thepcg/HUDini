@@ -14,6 +14,9 @@ One fixed word for each thing in player-facing text: option labels, tooltips, ch
 | combat buff | A buff from your class file that you keep on in a fight (for a Mage: Ice Barrier, Mana Shield). The "Combat buff is off" alert shows the one to cast | class buff, keep-up, keep up, shield |
 | tracked buff | A buff of 5 minutes or more, or with no end (a paladin aura), that HUDini saw you cast, and now watches (for example Arcane Intellect). `/hud buffs` lists them. The options call them "learned buffs" ("Clear learned buffs"); both are fine | keep-up, keep up, long buff, class buff |
 | weapon buff | A temporary weapon enchant (poison, oil, imbue) | weapon enchant |
+| missing item | An item you can make or need for a spell (a Mana Gem, a Soul Shard) when your bags hold none. Its alert is an icon by your health bar, out of a fight (TICK-0182). A box or row names the item: "Missing item: Mana Gem" | conjured item, reagent alert, out of (for the alert) |
+| bell | The sound that rings when a spell's cooldown ends; its icon on the HUD glows for 5 seconds. Picked per spell under Cooldowns on the Your class page ("Bell", "Bell and timer bar"); its sound is Bell sound | chime, ding, ready sound |
+| timer bar | A bar under the HUD that drains while a spell's cooldown runs, with the spell's icon on the left. Picked per spell under Cooldowns on the Your class page | cooldown bar |
 | class default | The spell the class file picks for your class; the first choice in each Your class dropdown, and its reset | auto, built-in (for class default) |
 | class file | HUDini's list of spells for one class: its interrupt, dispels, purge, combat buffs and resource. A player rarely needs the word; prefer "HUDini knows no ... for your class" | class profile, profile |
 | feed | The fading list of what you get (loot, money, XP, rep) | loot window, toast (for the feed) |

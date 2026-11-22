@@ -2,11 +2,15 @@
 -- first spell you know, off cooldown, that you can cast now (stance, form,
 -- shield, rage).
 
+-- Test class profiles, not the live class files (classes_fixture.lua): the
+-- Warrior's interrupt list here is { "Pummel", "Shield Bash" }.
+local Classes = assert(loadstring(H.readFile("tools/tests/classes_fixture.lua")))()
+
 -- A Warrior who knows both, with usable[name] saying what the game says.
 -- usableAnswer, when given, replaces IsSpellUsable.
 local function Warrior(usable, ready, usableAnswer)
 	local NAMES = { [1] = "Pummel", [2] = "Shield Bash" }
-	local w = H.world()
+	local w = Classes.Use(H.world())
 	w.class, w.className = "WARRIOR", "Warrior"
 	local env = w.env
 	env.C_Spell.GetSpellName = function(id) return NAMES[id] end
@@ -84,7 +88,7 @@ end)
 -- IsSpellUsable as secret, until the next cooldown read.
 H.test("a secret usable answer counts as usable", function()
 	local hidden = false
-	local w = H.world()
+	local w = Classes.Use(H.world())
 	w.env.issecretvalue = function(v) return hidden and v == false end
 	local env = w.env
 	local NAMES = { [1] = "Pummel", [2] = "Shield Bash" }
@@ -114,7 +118,7 @@ end)
 -- as secret, until IsSpellUsable answers.
 H.test("a secret off-cooldown answer is not ready", function()
 	local hidden, hide = false, false
-	local w = H.world()
+	local w = Classes.Use(H.world())
 	w.env.issecretvalue = function(v) return hidden and v == false end
 	local env = w.env
 	local NAMES = { [1] = "Pummel", [2] = "Shield Bash" }

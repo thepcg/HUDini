@@ -6,6 +6,55 @@ What changed in each version of HUDini, for players. The format follows
 features, and a new patch version fixes them. `/hud version` tells you
 which version you have.
 
+## [0.31.0] - 2026-11-22
+
+### Added
+
+- Cooldowns, under Advanced on the Your class page: for each spell you
+  know, pick a bell, a timer bar, or both. The bell rings when the
+  cooldown ends and, if the spell is on the HUD, its icon glows for 5
+  seconds. The timer bar sits under the HUD while the cooldown runs, with
+  the spell's icon and the time left; the bar with the least time left is
+  on top. Your class's own spells come first, such as Heroism and
+  Bloodlust for a Shaman, then every other spell you know that has a
+  cooldown, such as Earth Shock and Flame Shock. A spell you learn later
+  gets its row the next time you open the options.
+- The timer bars move on their own: use `/hud unlock` and drag their blue
+  box, then `/hud lock`. Each class keeps its own place. Timer bar place,
+  under Advanced on the Bars page, puts them back under the HUD.
+- Timer bar texture and Timer bar text, under Advanced on the Bars page,
+  and the timer bar color, under Advanced on the Colors page. The text
+  shows the time left, or the percent left.
+- Sound when a buff is missing, under Buffs on the Your class page: a
+  sound when a buff reminder shows next to your health bar in a fight.
+  It is off until you pick a sound.
+- Bell sound, under Advanced on the Your class page: pick the sound the
+  bell plays when a cooldown ends. Each sound plays once when you pick it.
+- HUDini setup shows the version of HUDini at the top of every page.
+- HUDini setup has a step for your class. It suggests a bell for your big
+  cooldowns, the sound when a buff is missing, and missing items, already
+  checked; uncheck any you do not want. It also lists the alerts that are
+  already on, and the last page lists your picks.
+- Each class starts a few alerts on, such as the Evocation bell for a Mage
+  and the Lay on Hands bell for a Paladin. The Paladin, Priest, Shaman and
+  Warrior also start the sound when a buff is missing. A bell starts when
+  you learn its spell. Turn any of them off on the Your class page or in
+  HUDini setup, and it stays off.
+- Missing items, under Advanced on the Your class page: out of a fight, an
+  icon by your health bar when your bags hold none of an item you can make
+  or need for a spell, such as Flash Powder for a Rogue's Vanish. Show
+  your health must be on.
+
+### Changed
+
+- A weapon skill line in the feed now shows how high the skill can go,
+  such as "Swords 43/70". Profession lines are as before.
+- Class alerts use WoW Forever's own spells for all nine classes. Spells
+  that WoW Forever does not have are gone, such as Spellsteal and the
+  Blessings of Salvation, Light and Sanctuary. Each class spell also has
+  its WoW Forever spell ID, so the alerts find it in a game client of any
+  language.
+
 ## [0.30.0] - 2026-11-14
 
 The first public release. HUDini puts your action bars, in keybind order,

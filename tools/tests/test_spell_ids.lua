@@ -19,9 +19,12 @@ local DE = {
 	[2139]  = "Gegenzauber",              -- Counterspell (a class file's ids)
 }
 
+-- Test class profiles, not the live class files (classes_fixture.lua).
+local Classes = assert(loadstring(H.readFile("tools/tests/classes_fixture.lua")))()
+
 -- A world on a client in locale, whose GetSpellName answers from names.
 local function World(locale, names, setup)
-	local w = H.world()
+	local w = Classes.Use(H.world())
 	w.env.GetLocale = function() return locale end
 	w.env.C_Spell.GetSpellName = function(id) return names[id] end
 	if setup then setup(w) end
@@ -455,6 +458,10 @@ local function EnglishWorld(wrong)
 	local names = {}
 	local w, ns = World("enUS", names)
 	for name, id in pairs(ns.SPELL_IDS) do names[id] = name end
+	-- The class files' own ids are right on this client too.
+	for _, p in pairs(ns.ClassProfiles()) do
+		for name, id in pairs(p.ids or {}) do names[id] = name end
+	end
 	for name, real in pairs(wrong) do
 		names[ns.SPELL_IDS[name]] = nil
 		names[real] = name
@@ -482,9 +489,20 @@ end
 H.test("/hud debug ids checks each ID, finds the right one, and saves the result", function()
 	local w, ns = EnglishWorld({ ["Stealth"] = 25000 })
 	w:slash("/hud debug ids")
-	local total = 0
-	for _ in pairs(ns.SPELL_IDS) do total = total + 1 end
-	H.ok(H.printed(w, ("Spell IDs: %d of %d match their enUS name."):format(total - 2, total)))
+	-- The count from the printed line: it also holds each class file ID
+	-- whose name the profile uses (an ID only a missing-item row uses is
+	-- not checked), so it is at least the SPELL_IDS count.
+	local shared = 0
+	for _ in pairs(ns.SPELL_IDS) do shared = shared + 1 end
+	local match, total
+	for _, line in ipairs(w.printed) do
+		local m, t = line:match("Spell IDs: (%d+) of (%d+) match their enUS name%.")
+		if m then match, total = tonumber(m), tonumber(t) end
+	end
+	H.ok(total, "the count line is printed")
+	H.ok(total >= shared, "every shared ID is checked")
+	H.ok(total > shared, "a class file ID is checked too (the test Warrior's Pummel)")
+	H.eq(match, total - 2, "all but Stealth and Shadowmeld match")
 	H.ok(H.printed(w, "shared: Stealth: 1784 is no spell"))
 	H.ok(H.printed(w, w.ns.TEXT[0]["debug.idsLooking"]:match("^[^%%]*")))
 	H.eq(w.env.HUDiniDB.spellIDReport, nil, "saved only at the end")

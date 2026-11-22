@@ -42,7 +42,7 @@ Classes with the appropriate abilities can also receive:
 - An outline on an interruptible target cast when a configured interrupt is ready.
 - A power-bar tint for a harmful effect you have a configured spell to remove.
 - Icons for enemy buffs that match your removal ability.
-- A reminder when your chosen combat buff is missing.
+- A reminder when your chosen combat buff is missing, with a sound if you want one.
 
 These alerts depend on the spells you know and the information the client provides. Choose the abilities they use on the **Your class** page.
 
@@ -79,7 +79,7 @@ The setup guide opens on your first login with the addon enabled.
 
 > You were promised a setup wizard. The makers of this addon appear to have taken that rather literally.
 
-**HUDini Setup** introduces the display and walks you through six configuration steps. Choose the information you want, settle the HUD and feed into comfortable positions, and decide how much of the original interface should remain in view.
+**HUDini setup** introduces the display and walks you through six configuration steps. Choose the information you want, settle the HUD and feed into comfortable positions, and decide how much of the original interface should remain in view.
 
 Choices marked **(default)** provide a starting point. **Changes take effect as you make them.** Selecting **Finish for now**, or pressing Escape, keeps your choices and locks the displays in place.
 
@@ -92,7 +92,7 @@ Prefer steady company? Choose **Always visible** to keep the main HUD shown when
 | Open all settings | `/hud` |
 | Run setup again with your current choices | `/hud setup` |
 | Find out why the main HUD is visible or hidden | `/hud why` |
-| Move the HUD and feed | `/hud unlock`, drag their highlighted boxes, then `/hud lock` |
+| Move the HUD, feed and timer bars | `/hud unlock`, drag their highlighted boxes, then `/hud lock` |
 | See a demonstration with sample information | `/hud test`; run it again to finish |
 | Find a command | `/hud help` |
 
@@ -137,7 +137,7 @@ Open settings with `/hud` or through **Options > AddOns > HUDini**. Common choic
 | **Bars** | Player and target information, health-bar clicks, class resources, fonts, textures, and dimensions. |
 | **Colors** | The colors of your bars, target reactions, and target casts. |
 | **Alerts** | Class ability alerts and other reminders. |
-| **Your class** | Abilities used for interrupts, dispels, enemy-buff removal, and combat-buff reminders; the resource to track; and learned buffs. Choices are shared by characters of that class. |
+| **Your class** | Abilities used for interrupts, dispels, enemy-buff removal, and combat-buff reminders; the resource to track; learned buffs; and a bell or timer bar for each cooldown you pick. Choices are shared by characters of that class. |
 | **Feed** | Event types, larger announcements, optional hints, appearance, message timing, and filters. |
 | **Game frames** | Original displays, hover behavior, bag upgrade numbers, movable windows, muting cooldown and range voice lines, and the date and time on chat lines. |
 
@@ -188,7 +188,7 @@ Use `/hud reset no` to cancel either pending reset. `/hud reset` alone explains 
 | `/hud options` | Open Options. |
 | `/hud setup` | Run the setup guide again. |
 | `/hud why` | Explain the main HUD's current visibility. |
-| `/hud unlock` and `/hud lock` | Position the HUD and feed, then secure them. |
+| `/hud unlock` and `/hud lock` | Position the HUD, feed and timer bars, then secure them. |
 | `/hud test` | Start or stop the sample demonstration. |
 | `/hud buffs` | List learned buffs. Add `forget Name` to remove one, or `clear` to clear the list. Eligible buffs can be learned again. |
 | `/hud auramap` | List custom spell-to-buff pairs. Add `Spell = Buff` to create a pair, or `Spell =` to remove that spell's custom pairs. |
