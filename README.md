@@ -134,12 +134,13 @@ Open settings with `/hud` or through **Options > AddOns > HUDini**. Common choic
 |---|---|
 | **HUDini** | Presets, setup, the minimap button, About, position, scale, visibility conditions, fade duration, and the guide's flair. |
 | **Icons** | Rows or packed layout, sort order, size, spacing, growth direction, icon details, and which action bars to read. |
-| **Bars** | Player and target information, health-bar clicks, class resources, fonts, textures, and dimensions. |
+| **Bars** | Player and target information, health-bar clicks, class resources, fonts, and dimensions. |
+| **Textures** | The fill of every bar, and for each bar its own texture, a gradient, or an image file of your own. |
 | **Colors** | The colors of your bars, target reactions, and target casts. |
-| **Alerts** | Class ability alerts and other reminders. |
-| **Your class** | Abilities used for interrupts, dispels, enemy-buff removal, and combat-buff reminders; the resource to track; learned buffs; and a bell or timer bar for each cooldown you pick. Choices are shared by characters of that class. |
+| **Alerts** | Class ability alerts and other reminders; sound alerts for combat start and end, low health, low mana, and honorable kills. |
+| **Your class** | Abilities used for interrupts, dispels, enemy-buff removal, and combat-buff reminders; the ammo alert; the pet alert for Hunters and Warlocks; the resource to track; learned buffs; a sound for each class alert; the class resource bar's texture; and a ready glow, a timer bar with its texture, and a sound with its volume for each cooldown you pick. Choices are shared by characters of that class. |
 | **Feed** | Event types, larger announcements, optional hints, appearance, message timing, and filters. |
-| **Game frames** | Original displays, hover behavior, bag upgrade numbers, movable windows, muting cooldown and range voice lines, and the date and time on chat lines. |
+| **Game frames** | Original displays, hover behavior, bag upgrade numbers, movable windows, the date and time on chat lines, a ring around your cursor, and a mute for each of your character's error voice lines. |
 
 A grayed-out setting needs another choice enabled, a different layout, or a suitable class ability. Its tooltip explains the requirement. The page's **Defaults** button restores that page's settings.
 

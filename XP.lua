@@ -75,7 +75,7 @@ local function XPBar()
 	-- Rested XP: a sibling one frame level down, so the XP fill draws over it.
 	-- It carries the backdrop, since the XP bar's own would cover it.
 	local rested = CreateFrame("StatusBar", "HUDiniBar_rested", bar:GetParent())
-	ns.StyleBar(rested, "rested")
+	ns.StyleBar(rested, "rested", nil, "xp")
 	rested:SetAllPoints(bar)
 	bar:SetFrameLevel(rested:GetFrameLevel() + 1)
 

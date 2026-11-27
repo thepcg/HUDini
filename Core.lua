@@ -175,6 +175,7 @@ ns.defaults = {
 	hideBlizzardTarget   = false, -- the target frame and its cast bar; needs showTargetHealth
 	hideBlizzardCastBar  = false, -- your cast bar; needs showPlayerCast and showPower
 	hideBlizzardXP       = false, -- the XP bar, only while you earn XP; showXP not needed (TICK-0080)
+	hideBlizzardObjectives = false, -- the objective list on the right; needs no HUDini bar (D-053)
 	bagBarMouseover      = false, -- the bag bar shows only under the mouse
 	menuBarMouseover     = false, -- ... and the menu buttons
 	minimapMouseover     = false, -- ... and the minimap
@@ -1162,6 +1163,11 @@ function HUDini:ShouldShow()
 		return true, Text("why.noBait")
 	end
 
+	-- Low ammo or no ammo (Alerts.lua, TICK-0236): show for a few seconds
+	-- when it starts and at a fight's start and end, so its alert is seen.
+	-- The poll finds the end of those seconds.
+	if ns.AmmoWake and ns.AmmoWake() then return true, Text("why.ammo") end
+
 	-- An item you make is not in your bags, and you can make it now
 	-- (Alerts.lua, TICK-0182): show, so its icon is seen. A reagent you
 	-- need for a spell never shows the HUD.
@@ -1330,6 +1336,32 @@ end
 -- (TargetFrame)). Hiding PlayerFrame takes its
 -- children too: the pet frame, any class resource Blizzard hangs on it, and
 -- your cast bar when Edit Mode locks it to the player frame.
+--
+-- The objective list (ObjectiveTrackerFrame, D-053) is an Edit Mode system
+-- frame and a managed frame too (Blizzard_ObjectiveTracker.xml:3,
+-- wow-ui-source forever d9c22e3), with no HUDini bar to match. It is not
+-- protected: nothing under it is a secure template, so all of its hide
+-- works in a fight. Blizzard shows and hides it at each layout
+-- (ObjectiveTrackerContainer.lua:117-127). Its layouts never set its
+-- alpha: the Opacity setting of Edit Mode goes to its background, NineSlice
+-- (:187-189; ObjectiveTrackerManager.lua:86-91). The managed frame system
+-- does: when UIParent shows again (Alt-Z, the end of a cinematic) it fades
+-- each shown managed frame back to alpha 1 (ManagedFrameSystem.lua:79-87,
+-- :124-134, :156-157). Its mouse does not hold either: each layout takes
+-- blocks from pools and makes new ones with the mouse on
+-- (ObjectiveTrackerManager.lua:61-80), and turns the mouse of bonus blocks
+-- back on (BonusObjectiveTracker.lua:318, :351). No script or callback
+-- marks the end of a layout, and the layout runs from many events, from
+-- Edit Mode and from its own dirty mark. Hooking its Update would write a
+-- field on an Edit Mode frame. So while it is hidden HUDini looks again
+-- every FOLLOW_EVERY seconds (follow, below): alpha 0 again, and the mouse
+-- off where a layout turned it on. It is a trade-off: for up to
+-- FOLLOW_EVERY seconds after a layout or after UIParent shows, the list can
+-- show, a new block's quest item button can take a click
+-- (ObjectiveTrackerShared.lua:94-103), a header or map pin click can open
+-- the map, and a hover can show a tooltip. Turning the mouse back on when
+-- the hide goes off can also turn on a block Blizzard turned off since
+-- (BonusObjectiveTracker.lua:46, :351); its next layout sets it again.
 --------------------------------------------------------------------------------
 
 -- setting is the opt-in; bars are HUDini's matching bars, which must all be
@@ -1337,9 +1369,10 @@ end
 -- so it needs both. The player frame shows your health and your mana, so it
 -- needs both too. The XP bar needs no HUDini bar: a player who hides it
 -- keeps it hidden with HUDini's XP bar off too (TICK-0080).
--- when, if given, must also be true. The XP bar lives in the
--- main status tracking container, which a tracked reputation moves into at
--- max level (or with XP gain off), so the container comes back then.
+-- when, if given, must also be true. holds, if given, is asked of the frame
+-- and must be true too: the XP bar has two possible containers, and only the
+-- one that shows it is hidden (TICK-0090, below). With no XP to earn the
+-- game shows no XP bar, so both containers show their own bars then.
 --
 -- how is the way HUDini hides the frame:
 -- - "alpha": alpha 0 on the frame, and its mouse and its children's off, so
@@ -1396,7 +1429,36 @@ end
 --   still shows and hides the frame itself, and keeps its place. It still
 --   takes the mouse: alpha 0 leaves a bar's tooltip on.
 --
+-- follow: while the frame is hidden, HUDini applies it again every
+-- FOLLOW_EVERY seconds, for the parts its own layouts make or turn on.
+--
 -- In Edit Mode every frame is visible, so it can be seen and moved.
+
+-- The XP bar's index in a status tracking container (BarsEnum.Experience,
+-- Shared/StatusTrackingBarConstants.lua), or nil on a client without it.
+local function XPIndex()
+	local info = _G.StatusTrackingBarInfo
+	local enum = type(info) == "table" and info.BarsEnum
+	return type(enum) == "table" and enum.Experience or nil
+end
+
+-- True while this status tracking container shows the XP bar (TICK-0090).
+-- Forever loads the Camelot bar priorities (Blizzard_StatusTrackingBar.toc:
+-- [Game]\StatusTrackingBarConstants.lua [AllowLoadGameType camelot]), with
+-- XP the lowest. The manager gives the first bar by priority to the main
+-- container and the next to the secondary one (StatusTrackingManager.lua
+-- :54-86), so with a watched reputation the XP bar is in the secondary
+-- container. Each container keeps the index of the bar it shows in
+-- shownBarIndex (:167, :197-220); HUDini only reads it. A client without
+-- the index or the field: the main container, as before.
+local function HoldsXP(frame)
+	local xp, shown = XPIndex(), frame.shownBarIndex
+	if xp == nil or shown == nil then
+		return frame == _G.MainStatusTrackingBarContainer
+	end
+	return shown == xp
+end
+
 local BLIZZ_FRAMES = {
 	{ global = "PlayerFrame",            setting = "hideBlizzardPlayer",
 	  bars = { "showHealth", "showPower" }, how = "alpha", keep = { "PetFrame" } },
@@ -1409,20 +1471,26 @@ local BLIZZ_FRAMES = {
 	  bars = { "showPlayerCast", "showPower" }, how = "events" },
 	{ global = "MainStatusTrackingBarContainer", setting = "hideBlizzardXP",
 	  bars = {}, when = function() return ns.EarningXP and ns.EarningXP() end,
-	  how = "fade" },
+	  holds = HoldsXP, how = "fade" },
+	{ global = "SecondaryStatusTrackingBarContainer", setting = "hideBlizzardXP",
+	  bars = {}, when = function() return ns.EarningXP and ns.EarningXP() end,
+	  holds = HoldsXP, how = "fade" },
+	{ global = "ObjectiveTrackerFrame",  setting = "hideBlizzardObjectives",
+	  bars = {}, how = "alpha", follow = true },
 }
 
 -- True between EditMode.Enter and EditMode.Exit.
 local inEditMode = false
 
--- True while this Blizzard frame should be hidden.
-local function WantHidden(entry)
+-- True while this Blizzard frame should be hidden. frame: for holds.
+local function WantHidden(entry, frame)
 	local db = HUDiniDB
 	if not db[entry.setting] then return false end
 	for _, key in ipairs(entry.bars) do
 		if not db[key] then return false end
 	end
 	if entry.when and not entry.when() then return false end
+	if entry.holds and not entry.holds(frame) then return false end
 	if inEditMode then return false end
 	return true
 end
@@ -1470,8 +1538,34 @@ local function FadeParts(frame)
 	return parts
 end
 
+-- One apply on the next frame (below).
+local QueueBlizzardFrames
+
+-- A container changes its bar after its fade-out (ApplyPendingBarToShow,
+-- StatusTrackingManager.lua:197-220), at no event, so HUDini hooks the
+-- show and hide of each container's own XP bar (InitializeBars makes one
+-- in each, StatusTrackingManagerOverrides.lua:42-70). That bar is a child
+-- frame, not the Edit Mode system frame, and HookScript writes no Lua
+-- field. The apply runs on the next frame: the container that took the bar
+-- fades in from alpha 0 (FadeIn, StatusTrackingManager.lua:233-254), and
+-- the one that gave it up has faded out to 0.
+local xpHooked = Weak()
+local function HookXPBar(frame)
+	local xp = XPIndex()
+	local bars = xp and frame.bars
+	local bar = type(bars) == "table" and bars[xp]
+	if not bar or xpHooked[bar] or not bar.HookScript then return end
+	xpHooked[bar] = true
+	local function Moved()
+		if HUDiniDB and HUDiniDB.hideBlizzardXP then QueueBlizzardFrames() end
+	end
+	bar:HookScript("OnShow", Moved)
+	bar:HookScript("OnHide", Moved)
+end
+
 local function ApplyFade(entry, frame)
-	local want = WantHidden(entry)
+	if entry.holds then HookXPBar(frame) end
+	local want = WantHidden(entry, frame)
 	if not want and not blizzHidden[entry.global] then return end
 	-- Every time, not only at a change: a part made later (a divider from
 	-- its pool) starts at alpha 1.
@@ -1739,37 +1833,74 @@ local APPLY = { alpha = ApplyAlpha, events = ApplyEvents, fade = ApplyFade }
 -- until an apply of it works.
 local applyFailed = {}
 
+-- Apply one entry. False when a part must wait, or on an error.
+local function ApplyEntry(entry)
+	local frame = _G[entry.global]
+	if not frame then return true end
+	local ok, result = pcall(APPLY[entry.how], entry, frame)
+	if not ok then
+		-- Tried again at the next apply, as a part that must wait.
+		if not applyFailed[entry] then
+			applyFailed[entry] = true
+			local handler = geterrorhandler and geterrorhandler()
+			if handler then handler(result) end
+		end
+		return false
+	end
+	-- A later error on this entry shows again.
+	applyFailed[entry] = nil
+	return result ~= false
+end
+
+-- How often HUDini looks again at a hidden follow frame (the objective
+-- list, above): the most time a block its layout made can take the mouse.
+local FOLLOW_EVERY = 0.25
+
+local followTicker
+
+-- Start the look while a follow frame is hidden, and stop it when none is.
+local function UpdateFollow()
+	local any = false
+	for _, entry in ipairs(BLIZZ_FRAMES) do
+		if entry.follow and blizzHidden[entry.global] then any = true end
+	end
+	if any and not followTicker then
+		local function Follow()
+			for _, entry in ipairs(BLIZZ_FRAMES) do
+				if entry.follow and blizzHidden[entry.global] then
+					-- A frame Blizzard hides has nothing that takes the
+					-- mouse; it is applied again once it shows.
+					local ok, shown = pcall(Call, _G[entry.global], "IsShown")
+					if (not ok or Plain(shown) ~= false) and not ApplyEntry(entry) then
+						HUDini.needBlizzFrames = true
+					end
+				end
+			end
+			UpdateFollow()
+		end
+		followTicker = C_Timer.NewTicker(FOLLOW_EVERY, Follow)
+	elseif not any and followTicker then
+		followTicker:Cancel()
+		followTicker = nil
+	end
+end
+
 -- None of it is protected but the mouse of a protected frame, so it runs in
 -- a fight too; that part waits for the fight to end (needBlizzFrames). One
 -- frame's error stops neither the other frames nor the show check after.
 function HUDini:ApplyBlizzardFrames()
 	local done = true
 	for _, entry in ipairs(BLIZZ_FRAMES) do
-		local frame = _G[entry.global]
-		if frame then
-			local ok, result = pcall(APPLY[entry.how], entry, frame)
-			if not ok then
-				-- Tried again at the next apply, as a part that must wait.
-				done = false
-				if not applyFailed[entry] then
-					applyFailed[entry] = true
-					local handler = geterrorhandler and geterrorhandler()
-					if handler then handler(result) end
-				end
-			else
-				-- A later error on this entry shows again.
-				applyFailed[entry] = nil
-				if result == false then done = false end
-			end
-		end
+		if not ApplyEntry(entry) then done = false end
 	end
 	self.needBlizzFrames = not done
+	UpdateFollow()
 end
 
 -- One apply on the next frame, after Blizzard's own handler for the event,
 -- however many events ask for it.
 local blizzQueued = false
-local function QueueBlizzardFrames()
+function QueueBlizzardFrames()
 	if blizzQueued then return end
 	blizzQueued = true
 	C_Timer.After(0, function()
@@ -1972,6 +2103,18 @@ local FIRST_SCHEMA = 3
 local MIGRATIONS = {}
 ns.migrations = MIGRATIONS  -- the tests add steps of their own
 ns.FIRST_SCHEMA = FIRST_SCHEMA
+
+-- Step 1, schema 3 to 4 (TICK-0247): the one Quiet error voice box became
+-- one box per voice line (ErrorVoice.lua). The old box muted "still
+-- recharging" (with "I can't do that yet", the potion line) and "too far
+-- away", so an old "on" turns on those three and nobody hears a line they
+-- had muted. Off or never saved: the seven keep their default, off.
+MIGRATIONS[1] = function(db)
+	if db.muteErrorVoice == true then
+		db.muteVoiceCooldown, db.muteVoiceNotYet, db.muteVoiceRange = true, true, true
+	end
+	db.muteErrorVoice = nil
+end
 
 -- Bring a saved table up to the last step. A new install skips every step.
 -- A number above it (a newer HUDini wrote it) is left alone. A step that
@@ -2562,6 +2705,9 @@ local DEBUG = {
 	end },
 	{ "weapon", "debug.weapon", WeaponCommand },
 	{ "cooldown", "debug.cooldown", CooldownCommand },
+	{ "feed", "debug.feed", function()
+		if ns.FeedDebug then ns.FeedDebug() end
+	end },
 	{ "modules", "debug.modules", function()
 		-- "1 event", "2 events".
 		local function Count(n, word) return ("%d %s%s"):format(n, word, n == 1 and "" or "s") end
@@ -2741,7 +2887,7 @@ local COMMANDS = {
 	{ section = "help.section.help" },
 	{ "help",    "[command]",              "help.help", function(rest) HelpCommand(rest) end },
 	{ "version", "",                       "help.version", VersionCommand },
-	{ "debug",   "list|api|aura|modules|ids|weapon|cooldown", "help.debug", DebugCommand }, -- locale: skip command syntax
+	{ "debug",   "list|api|aura|modules|ids|weapon|cooldown|feed", "help.debug", DebugCommand }, -- locale: skip command syntax
 	{ "reset",   "settings|class|yes|no",  "help.reset", ResetCommand }, -- locale: skip command syntax
 }
 

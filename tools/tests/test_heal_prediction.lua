@@ -412,3 +412,26 @@ H.test("Bars.lua reads no absorb or heal amount itself", function()
 		H.ok(not src:find(name .. "(", 1, true), "Bars.lua calls " .. name)
 	end
 end)
+
+H.test("the heals on each bar wear that bar's own texture (TICK-0224)", function()
+	local w, ns = World()
+	for unit, key in pairs({ player = "health", target = "targethealth" }) do
+		local bar, p = ns.GetBar(key), P(ns, key)
+		H.eq(bar.lookId, key, unit .. ": the health bar's look")
+		H.eq(p.myHeal.lookId, key, unit .. ": your heals")
+		H.eq(p.otherHeal.lookId, key, unit .. ": others' heals")
+		H.eq(p.myHeal.lookFlat, true, unit .. ": no gradient on a part")
+	end
+	-- Target health on Flat: the heals on the target draw Flat, your own
+	-- bar's heals keep Bar texture.
+	ns.SetBarLook("targethealth", "texture", "flat")
+	local seen = {}
+	for key, part in pairs({ health = P(ns, "health").myHeal, targethealth = P(ns, "targethealth").myHeal }) do
+		part.lookAsked = nil
+		rawset(part, "SetStatusBarTexture", function(_, t) seen[key] = t end)
+		ns.PaintBar(part, { 0, 1, 0 })
+	end
+	H.eq(seen.targethealth, ns.TexturePathFor("flat"))
+	H.eq(seen.health, ns.BarTexturePath())
+	H.eq(#w.violations, 0)
+end)

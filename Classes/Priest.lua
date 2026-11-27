@@ -7,9 +7,8 @@
 
 local ADDON, ns = ...
 
--- No keepUp: Inner Fire lasts 10 minutes, so Auras.lua already learns it as
--- a buff to reapply. Power Word: Shield is not one either: Weakened Soul
--- blocks a recast for 15 sec, so it would always be "missing" in a fight.
+-- Power Word: Shield is no combat buff: Weakened Soul blocks a recast for
+-- 15 sec, so it would always be "missing" in a fight.
 ns.RegisterClass("PRIEST", {
 	interrupt = "Silence",                -- Shadow talent, level 30; interrupts 3 sec on Forever
 	-- Cure Disease, not Abolish Disease: one spell per type, and Cure Disease
@@ -18,6 +17,21 @@ ns.RegisterClass("PRIEST", {
 	              Disease = "Cure Disease" }, -- level 14
 	purge     = "Dispel Magic",           -- cast on a foe, it takes a magic buff
 	powers    = { "MANA" },
+	-- Inner Fire is in keepUp, so a fight shows it missing from level 12,
+	-- even before HUDini has seen it on you once (TICK-0211). It shares one
+	-- watch with the tracked buff Auras.lua learns: no second icon.
+	keepUp    = { "Inner Fire" },             -- level 12, 10 min or 20 charges
+	-- Tracked buffs from the start (TICK-0204): each shows missing even
+	-- before HUDini has seen it on you once. Fortitude and Divine Spirit last
+	-- 1 hour, so they count in and out of a fight; Prayer of Fortitude and
+	-- Prayer of Spirit count for them (Classes.lua). Shadowguard lasts 10 min:
+	-- in a fight only, once HUDini has read its length on you (D-033).
+	-- Not Touch of Weakness: it ends at the first melee hit.
+	trackBuff = {
+		"Power Word: Fortitude", -- level 1, 1 hour
+		"Divine Spirit",         -- level 30, 1 hour
+		"Shadowguard",           -- Troll, level 20, 10 min or 3 charges
+	},
 	-- Cooldown ready alerts (TICK-0157), offered first in the Cooldowns
 	-- group. A row shows only for a spell you know (TICK-0201), so each
 	-- race's own spells can be here: two per race, at levels 10 and 20.
@@ -63,12 +77,12 @@ ns.RegisterClass("PRIEST", {
 	-- Forever spell IDs (rank 1), for non-English clients.
 	-- locale: skip the game's spell names
 	ids = {
-		["Silence"] = 15487, ["Dispel Magic"] = 527, ["Cure Disease"] = 528,
+		["Inner Fire"] = 588, ["Silence"] = 15487, ["Dispel Magic"] = 527, ["Cure Disease"] = 528,
 		["Power Infusion"] = 10060, ["Inner Focus"] = 14751, ["Fear Ward"] = 6346,
 		["Psychic Scream"] = 8122, ["Desperate Prayer"] = 13908, ["Chastise"] = 1277331,
 		["Divine Grace"] = 1277370, ["Feedback"] = 13896, ["Elune's Grace"] = 2651,
 		["Contingency Plan"] = 1277462, ["Confounding Flash"] = 1277455,
-		["Dark Sacrifice"] = 1277324,
+		["Dark Sacrifice"] = 1277324, ["Shadowguard"] = 18137,
 		["Prayer of Fortitude"] = 21562, ["Prayer of Spirit"] = 27681,
 		["Prayer of Shadow Protection"] = 27683, ["Levitate"] = 1706,
 	},

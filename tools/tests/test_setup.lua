@@ -875,7 +875,7 @@ H.test("step 7: the known bells in class file order, then the buff sound, in two
 	H.eq(Visible(p.question), T["setup.class.question"]:format("Mage"))
 	H.eq(Visible(p.under), T["setup.class.under"])
 	H.eq(Visible(p.changes), T["setup.class.changes"])
-	H.eq(MiniNames(w), "Bell: Evocation,Bell: Cold Snap," .. SOUND, "Ice Block is not known: no box")
+	H.eq(MiniNames(w), "Ready alert: Evocation,Ready alert: Cold Snap," .. SOUND, "Ice Block is not known: no box")
 	local m = Minis(w)
 	H.eq(select(4, m[1].row:GetPoint()), select(4, m[3].row:GetPoint()), "the third box starts the second row")
 	H.ok(select(4, m[2].row:GetPoint()) > select(4, m[1].row:GetPoint()), "the second box is right of the first")
@@ -895,7 +895,7 @@ H.test("step 7: at most four bells, those that start on first, then the others, 
 		profile.readyAlertOn = { "Frost Nova", "Ice Block", "Cold Snap" }
 	end)
 	ClassPage(w)
-	H.eq(MiniNames(w), "Bell: Ice Block,Bell: Frost Nova,Bell: Evocation,Bell: Blink," .. SOUND)
+	H.eq(MiniNames(w), "Ready alert: Ice Block,Ready alert: Frost Nova,Ready alert: Evocation,Ready alert: Blink," .. SOUND)
 end)
 
 H.test("step 7: no readyAlert gives no bell box, no keepUp no sound box; with nothing, setup skips it", function()
@@ -904,7 +904,7 @@ H.test("step 7: no readyAlert gives no bell box, no keepUp no sound box; with no
 	H.eq(MiniNames(w), SOUND, "no readyAlert: no bell")
 	w = ClassWorld({ "Evocation" }, function(profile) profile.keepUp = nil end)
 	ClassPage(w)
-	H.eq(MiniNames(w), "Bell: Evocation", "no keepUp: no sound box")
+	H.eq(MiniNames(w), "Ready alert: Evocation", "no keepUp: no sound box")
 	-- No box and no Already on line: six steps, and step 6 leads to page 9.
 	w = ClassWorld({ "Counterspell" }, function(profile)
 		profile.readyAlert, profile.keepUp = nil, nil
@@ -926,12 +926,12 @@ H.test("step 7: keepUpSoundOn with no keepUp gives the sound box", function()
 		profile.keepUp, profile.keepUpSoundOn = nil, true
 	end)
 	ClassPage(w)
-	H.eq(MiniNames(w), "Bell: Evocation," .. SOUND, "the sound box")
+	H.eq(MiniNames(w), "Ready alert: Evocation," .. SOUND, "the sound box")
 	w = ClassWorld({ "Evocation" }, function(profile)
 		profile.keepUp, profile.keepUpSoundOn = nil, false
 	end)
 	ClassPage(w)
-	H.eq(MiniNames(w), "Bell: Evocation", "keepUpSoundOn false: no sound box")
+	H.eq(MiniNames(w), "Ready alert: Evocation", "keepUpSoundOn false: no sound box")
 end)
 
 -- TICK-0182: one box for each missing item row whose spell you know.
@@ -950,10 +950,10 @@ end
 H.test("step 7: a known missing item gives a box after the sound box, named as the game names it", function()
 	local w = ItemWorld({ "Evocation", "Conjure Mana Gem" })
 	ClassPage(w)
-	H.eq(MiniNames(w), "Bell: Evocation," .. SOUND .. "," .. GEM)
+	H.eq(MiniNames(w), "Ready alert: Evocation," .. SOUND .. "," .. GEM)
 	w = ItemWorld({ "Evocation" })
 	ClassPage(w)
-	H.eq(MiniNames(w), "Bell: Evocation," .. SOUND, "the spell not known: no box")
+	H.eq(MiniNames(w), "Ready alert: Evocation," .. SOUND, "the spell not known: no box")
 	-- The game has not loaded the item yet: the spell's name.
 	w = ClassWorld({ "Conjure Mana Gem" })
 	ClassPage(w)
@@ -1004,7 +1004,7 @@ H.test("step 7: a KnownSpell that says false is not known", function()
 		ns.KnownSpell = function(name) return known(name) or false end
 	end)
 	ClassPage(w)
-	H.eq(MiniNames(w), "Bell: Evocation," .. SOUND)
+	H.eq(MiniNames(w), "Ready alert: Evocation," .. SOUND)
 end)
 
 H.test("step 7: each box shows its value now, and Next writes nothing", function()
@@ -1022,11 +1022,12 @@ H.test("step 7: each box shows its value now, and Next writes nothing", function
 	H.eq(ns.GetReadyAlert("Cold Snap"), true)
 	H.eq(ns.GetKeepUpSoundChoice(), "off")
 	H.eq(db.classes.MAGE.keepUpSound, nil, "Next writes no sound")
-	H.eq(db.classes.MAGE.readyAlerts.Evocation, nil, "Next writes no bell")
+	H.eq((db.classes.MAGE.readyGlow or {}).Evocation, nil, "Next writes no glow")
+	H.eq((db.classes.MAGE.readySounds or {}).Evocation, nil, "and no sound")
 	if before then H.eq(H.dump(db.classes), before) end
 end)
 
-H.test("step 7: a bell click turns the bell only; the timer bar stays; the Options row repaints", function()
+H.test("step 7: a ready alert click leaves the timer bar; the Options row repaints", function()
 	local w, ns = ClassWorld({ "Evocation" }, nil, function(ns) ns.SetTimerBar("Evocation", true) end)
 	local notified = {}
 	w.env.Settings.GetSetting = function(variable)
@@ -1035,15 +1036,27 @@ H.test("step 7: a bell click turns the bell only; the timer bar stays; the Optio
 	w.env.SettingsPanel:Show()
 	ClassPage(w)
 	notified = {}
-	TickMini(w, "Bell: Evocation")
+	TickMini(w, "Ready alert: Evocation")
 	H.eq(ns.GetReadyAlert("Evocation"), true)
 	H.eq(ns.GetTimerBar("Evocation"), true, "the bar stays")
-	H.eq(table.concat(notified, ","), "HUDini_class_cooldown_Evocation")
+	H.eq(table.concat(notified, ","), "HUDini_class_cooldown_Evocation_glow", "the glow repaints the whole grid row")
 	H.eq(Minis(w)[1].checked, true)
-	TickMini(w, "Bell: Evocation", true)
+	TickMini(w, "Ready alert: Evocation", true)
 	H.eq(ns.GetReadyAlert("Evocation"), false, "on the check box too")
 	H.eq(ns.GetTimerBar("Evocation"), true, "the bar still stays")
 	H.eq(Minis(w)[1].checked, false)
+end)
+
+H.test("step 7: the sound box puts back the sound at its volume", function()
+	local w, ns = ClassWorld({ "Evocation" }, nil, function(ns)
+		ns.SetKeepUpSound({ key = "voiceKick", volume = 25 })
+	end)
+	ClassPage(w)
+	TickMini(w, SOUND)
+	H.eq(ns.GetKeepUpSoundValue(), false, "off")
+	TickMini(w, SOUND)
+	local c = ns.GetKeepUpSoundValue()
+	H.eq(c and (c.key .. "@" .. c.volume), "voiceKick@25", "on again: the same sound and volume")
 end)
 
 H.test("step 7: the sound box puts back the last sound, else the default", function()
@@ -1119,8 +1132,8 @@ H.test("page 9: the picks of step 7, then /hud test", function()
 	local w, ns = ClassWorld({ "Evocation", "Cold Snap" }, nil, function(ns) ns.SetKeepUpSound("alarmClock") end)
 	local T = ns.TEXT[0]
 	ClassPage(w)
-	TickMini(w, "Bell: Evocation")
-	TickMini(w, "Bell: Cold Snap")
+	TickMini(w, "Ready alert: Evocation")
+	TickMini(w, "Ready alert: Cold Snap")
 	Next(w)
 	H.eq(Visible(Parts(w).alerts), table.concat({
 		T["setup.p7.classPicks"]:format("Mage"),
@@ -1129,8 +1142,8 @@ H.test("page 9: the picks of step 7, then /hud test", function()
 		T["setup.p7.test"],
 	}, "\n"))
 	Press(w, "left1")
-	TickMini(w, "Bell: Evocation")
-	TickMini(w, "Bell: Cold Snap")
+	TickMini(w, "Ready alert: Evocation")
+	TickMini(w, "Ready alert: Cold Snap")
 	TickMini(w, SOUND)
 	Next(w)
 	H.eq(Visible(Parts(w).alerts), table.concat({
@@ -1168,6 +1181,65 @@ H.test("step 7: dispel and keep-up name the first known spell only", function()
 	lines = ns.SetupAlertLines()
 	H.eq(lines[1], ns.TEXT[0]["setup.class.dispel"]:format("Cure"), "dispel: by type, Magic first")
 	H.eq(#lines, 1)
+end)
+
+-- The test Mage with trackBuff (TICK-0209): Arcane Intellect and the armor
+-- group of the fixture's auraMap. keepUp, if given, replaces its own.
+local function TrackWorld(known, class, track, keepUp)
+	local w = NewWorld()
+	if class then w.class, w.className = class, class:sub(1, 1) .. class:sub(2):lower() end
+	Know(w, known)
+	local ns = w:loadAddon()
+	local real = ns.ClassValue
+	ns.ClassValue = function(key)
+		if key == "trackBuff" then return track or { "Arcane Intellect", "Frost Armor", "Ice Armor", "Mage Armor" } end
+		if key == "keepUp" and keepUp then return keepUp end
+		return real(key)
+	end
+	return w, ns
+end
+
+H.test("step 7: the tracked buff line names each known buff, one name per group (TICK-0209)", function()
+	local w, ns = TrackWorld({ "Arcane Intellect", "Frost Armor", "Ice Armor", "Mage Armor" })
+	local lines, unknown = ns.SetupAlertLines()
+	H.eq(lines[#lines], ns.TEXT[0]["setup.class.trackBuff"]:format("Arcane Intellect, Frost Armor"),
+		"the armors are one group: the first known says it")
+	H.eq(unknown, true, "Ice Barrier and the others are still to learn")
+	-- A Mage who knows only Ice Armor of the group: it names that one.
+	w, ns = TrackWorld({ "Arcane Intellect", "Ice Armor" })
+	lines = ns.SetupAlertLines()
+	H.eq(lines[#lines], ns.TEXT[0]["setup.class.trackBuff"]:format("Arcane Intellect, Ice Armor"))
+end)
+
+H.test("step 7: the tracked buff line follows its alert row and known spells (TICK-0209)", function()
+	local w, ns = TrackWorld({})
+	local lines, unknown = ns.SetupAlertLines()
+	H.eq(#lines, 0, "a level 1 Mage who knows none: no line")
+	H.eq(unknown, true, "and More start as you learn their spells")
+	w, ns = TrackWorld({ "Arcane Intellect" })
+	H.eq(ns.SetupAlertLines()[1], ns.TEXT[0]["setup.class.trackBuff"]:format("Arcane Intellect"))
+	w.env.HUDiniDB.warnOwnBuff = false
+	H.eq(#ns.SetupAlertLines(), 0, "Tracked buff is off unchecked: no line")
+end)
+
+H.test("step 7: a tracked buff the combat buff line names is said once (TICK-0209 review)", function()
+	-- A Warlock's armor is in keepUp and in trackBuff (one auraMap group).
+	local armor = { "Demon Armor", "Demon Skin" }
+	local w, ns = TrackWorld({ "Demon Skin" }, "WARLOCK", armor, armor)
+	local lines = ns.SetupAlertLines()
+	local T = ns.TEXT[0]
+	H.eq(lines[#lines], T["setup.class.keepUp"]:format("Demon Skin"), "the combat buff line says it")
+	for _, line in ipairs(lines) do
+		H.ok(not line:find(T["setup.class.trackBuff"]:format(""), 1, true), "no tracked buff line for the same armor")
+	end
+	-- With the combat buff row off, the tracked buff line says the armor.
+	w.env.HUDiniDB.warnKeepUp = false
+	lines = ns.SetupAlertLines()
+	H.eq(lines[#lines], T["setup.class.trackBuff"]:format("Demon Skin"))
+	-- Another buff of trackBuff still shows next to the covered armor.
+	w, ns = TrackWorld({ "Demon Skin", "Unending Breath" }, "WARLOCK", { "Unending Breath", "Demon Armor" }, armor)
+	lines = ns.SetupAlertLines()
+	H.eq(lines[#lines], T["setup.class.trackBuff"]:format("Unending Breath"))
 end)
 
 H.test("step 7: a spell saved by ID shows its name", function()

@@ -358,7 +358,7 @@ for _, k in ipairs({
 	"SetDuration", "SetFromAlpha", "SetToAlpha", "SetOrigin", "SetScaleFrom", "SetScaleTo",
 	"SetSmoothing", "SetToFinalAlpha", "Play", "Stop", "IsPlaying", "GetLeft", "GetTop",
 	"SetBackdropBorderColor", "SetToplevel", "LockHighlight", "UnlockHighlight",
-	"SetAutoFocus", "HighlightText", "ClearFocus",
+	"SetAutoFocus", "HighlightText", "ClearFocus", "SetMotionScriptsWhileDisabled",
 	"SetBlendMode", "SetCheckedTexture", "SetDrawBling", "SetDrawEdge", "SetDrawSwipe", "SetHideCountdownNumbers", "SetLooping",
 }) do WIDGET_API[k] = NoOp end
 
@@ -512,12 +512,13 @@ local function ReadFile(rel)
 end
 H.readFile = ReadFile -- a repo file's text, by its path from the repo root
 
--- The .lua files the .toc lists, in load order.
+-- The .lua files the .toc lists, in load order. The harness reads no XML
+-- (OptionsGrid.xml, TICK-0203): the client loads it.
 function H.tocFiles()
 	local files = {}
 	for line in ReadFile("HUDini.toc"):gmatch("[^\r\n]+") do
 		line = line:match("^%s*(.-)%s*$")
-		if line ~= "" and not line:find("^#") then
+		if line ~= "" and not line:find("^#") and line:find("%.lua$") then
 			files[#files + 1] = (line:gsub("\\", "/"))
 		end
 	end

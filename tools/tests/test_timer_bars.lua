@@ -120,6 +120,16 @@ local function Finish(w, id)
 end
 
 local function Order(ns) return table.concat(ns.TimerBarOrder(), ",") end
+
+-- On screen: the frame and every parent shown (the stub's IsVisible looks
+-- at the frame alone).
+local function OnScreen(f)
+	while f do
+		if not f:IsShown() then return false end
+		f = f:GetParent()
+	end
+	return true
+end
 local function Bar(ns, name) return ns.TimerBarFrame(name) end
 
 H.test("timer bars: the class file's spells are offered, all off, and nothing shows", function()
@@ -322,9 +332,27 @@ H.test("timer bars: the bar takes the timer color and the HUD's texture, or its 
 	H.eq(seen.texture, ns.BarTexturePath(), "the HUD's bar texture by default")
 	H.eq(seen.color[1], 1, "the chosen color")
 	H.eq(seen.color[2], 0)
-	w.env.HUDiniDB.timerBarTexture = "flat"
+	ns.SetBarLook(ns.TimerLookId("Heroism"), "texture", "flat")
 	ns.RefreshTimerBars()
 	H.eq(seen.texture, ns.TexturePathFor("flat"), "a texture of its own")
+end)
+
+H.test("timer bars: each bar wears its own color; one with none, the timer color (TICK-0258)", function()
+	local ns, w = World()
+	ns.SetTimerBar("Heroism", true)
+	ns.SetTimerBar("Bloodlust", true)
+	Cast(w, HEROISM, 300)
+	Cast(w, BLOODLUST, 100)
+	local seen = {}
+	for _, name in ipairs({ "Heroism", "Bloodlust" }) do
+		rawset(Bar(ns, name).bar, "SetStatusBarColor", function(_, r, g, b) seen[name] = { r, g, b } end)
+	end
+	w.env.HUDiniDB.colors = w.env.HUDiniDB.colors or {}
+	w.env.HUDiniDB.colors.timer = { 1, 0, 0 }
+	ns.RefreshTimerBars()
+	ns.SetBarLook(ns.TimerLookId("Heroism"), "base", { 0, 1, 0 })
+	H.eq(table.concat(seen.Heroism, ","), "0,1,0", "Heroism: its own color, at once")
+	H.eq(table.concat(seen.Bloodlust, ","), "1,0,0", "Bloodlust keeps the timer color")
 end)
 
 H.test("timer bars: under the totem row when it shows, right under the HUD when not", function()
@@ -546,7 +574,7 @@ H.test("timer bars: a bar is styled when it shows or its look changes, not on ea
 	w:fire("SPELL_UPDATE_COOLDOWN")
 	w:runTimers()
 	H.eq(n, 0, "the ticker and the events do not style it again")
-	w.env.HUDiniDB.timerBarTexture = "flat"
+	ns.SetBarLook(ns.TimerLookId("Heroism"), "texture", "flat")
 	ns.RefreshTimerBars()
 	H.eq(n, 1, "a new texture does")
 	w.env.HUDiniDB.iconSize = 50
@@ -705,4 +733,54 @@ H.test("timer bars: off, the holder and its blue box hide, unlocked or not", fun
 	SetLocked(ns, w, true)
 	SetLocked(ns, w, false)
 	H.eq(ns.TimerBarHolder().grab:IsShown(), false, "unlocked again: still nothing")
+end)
+
+H.test("timer bars stay (TICK-0219): off by default, a bar hides with the HUD", function()
+	local ns, w = World()
+	H.eq(w.env.HUDiniDB.timerBarsStay, false, "off by default")
+	ns.SetTimerBar("Heroism", true)
+	Cast(w, HEROISM, 300)
+	local f = Bar(ns, "Heroism")
+	H.eq(ns.TimerBarHolder():GetParent(), ns.HUDini.body, "in the body")
+	ns.HUDini.body:Hide()
+	H.eq(OnScreen(f), false, "the HUD hides: the bar goes with it")
+end)
+
+H.test("timer bars stay (TICK-0219): on, a running bar shows while the HUD hides", function()
+	local ns, w = World()
+	ns.SetTimerBar("Heroism", true)
+	Cast(w, HEROISM, 300)
+	w.env.HUDiniDB.timerBarsStay = true
+	ns.RefreshTimerBars()
+	local holder = ns.TimerBarHolder()
+	H.eq(holder:GetParent(), ns.HUDini, "on the anchor, which never hides")
+	ns.HUDini.body:Hide()
+	local f = Bar(ns, "Heroism")
+	H.eq(OnScreen(f), true, "the bar stays in view")
+	local _, rel = holder:GetPoint(1)
+	H.eq(rel, ns.HUDini.mover, "at the same place: under the HUD")
+	Finish(w, HEROISM)
+	H.eq(OnScreen(f), false, "no running bar: nothing shows")
+	-- Off again: back in the body, hiding with it.
+	w.env.HUDiniDB.timerBarsStay = false
+	Cast(w, HEROISM, 300)
+	H.eq(holder:GetParent(), ns.HUDini.body, "back in the body")
+	H.eq(OnScreen(f), false, "and hidden with it")
+end)
+
+H.test("timer bars stay (TICK-0219): a saved place and the blue box still work", function()
+	local ns, w = World(function(w2)
+		w2.env.HUDiniDB = { timerBarsStay = true }
+	end)
+	ns.SetTimerBar("Heroism", true)
+	w.env.HUDiniDB.locked = false
+	ns.HUDini:ApplyLock()
+	local holder = ns.TimerBarHolder()
+	H.eq(holder:GetParent(), ns.HUDini, "on the anchor from login")
+	H.eq(holder.grab:IsShown(), true, "the blue box shows while unlocked")
+	w.env.HUDiniDB.classes.SHAMAN.timerBarPlace = { x = 200, y = 300 }
+	ns.RefreshTimerBars()
+	local _, rel = holder:GetPoint(1)
+	H.eq(rel, w.env.UIParent, "at its saved place")
+	H.eq(#w.blocked, 0, "nothing blocked")
 end)

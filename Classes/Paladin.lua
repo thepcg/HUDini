@@ -76,6 +76,8 @@ local ids = {
 	["Blessing of Protection"] = 1022,    -- level 10
 	["Divine Shield"]          = 642,     -- level 34
 	["Divine Intervention"]    = 19752,   -- level 30
+	-- Tank buff (30 minutes)
+	["Righteous Fury"]         = 25780,   -- level 10
 }
 
 -- Reagents (TICK-0182, TICK-0186). Item IDs are the Classic Era ones, not
@@ -105,6 +107,11 @@ ns.RegisterClass("PALADIN", {
 	-- seconds, so the sound tells you to look. It plays when the seal
 	-- reminder shows; a sound the moment the last seal ends is TICK-0194.
 	keepUpSoundOn = true,
+	-- Seal of Fury is the tank seal (Forever only: its Judgement taunts),
+	-- so with it on, a missing Righteous Fury gets an icon in a fight
+	-- (TICK-0208). Other seals get none: a Paladin who does not tank
+	-- keeps Righteous Fury off.
+	tankBuff  = { buff = "Righteous Fury", with = { "Seal of Fury" } },
 	auraMap   = auraMap,
 	powers    = { "MANA" },
 	-- Cooldown ready alerts (TICK-0157): offered on the "Your class" page.

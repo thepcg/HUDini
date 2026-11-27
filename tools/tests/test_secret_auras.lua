@@ -10,8 +10,12 @@
 -- secret that throws when compared or joined, as a real one does.
 -- w.names[id]: a spell's name, or a stub that gives it. w.auras[name]: the
 -- buff GetAuraDataBySpellName finds. w.index[filter]: the auras by slot.
+-- The test class files (classes_fixture.lua), so a class seat's trackBuff
+-- row changes no test here (TICK-0204).
+local Classes = assert(loadstring(H.readFile("tools/tests/classes_fixture.lua")))()
+
 local function World(setup)
-	local w = H.world()
+	local w = Classes.Use(H.world())
 	local env = w.env
 	w.secret = {}
 	env.issecretvalue = function(v)
@@ -414,4 +418,199 @@ H.test("/hud debug weapon writes secret for a secret answer, and throws nothing"
 	H.eq(Line("Buffs on you"), "Buffs on you: Lightning Shield (nil)", "secret spell ID: nil")
 	w.secret[324], w.secret["Lightning Shield"] = nil, true
 	H.eq(Line("Buffs on you"), "Buffs on you: secret", "secret name: secret")
+end)
+
+-- TICK-0198: a weapon with no weapon buff puts that buff on the own-buff
+-- icon, out of a fight, when no learned buff is off.
+H.test("a weapon with no weapon buff: its icon by the health bar, out of a fight", function()
+	local w, ns = WeaponWorld()
+	w.enchant = function() return false end
+	ns.UpdateBuffMissing()
+	H.eq(ns.missingBuffID, 8017, "Rockbiter Weapon's icon")
+	H.eq(ns.buffMissing, false, "not a learned buff: Core gives the weapon reason")
+	Tooltip(w, { "Sword", "Rockbiter 3 (53 min)" })
+	ns.UpdateBuffMissing()
+	H.eq(ns.missingBuffID, nil, "on the weapon: no icon")
+	Tooltip(w, { "Sword" })
+	w.combat = true
+	ns.UpdateBuffMissing()
+	H.eq(ns.missingBuffID, nil, "in a fight: cannot say, no icon")
+	w.combat = false
+	ns.UpdateBuffMissing()
+	H.eq(ns.missingBuffID, 8017, "after the fight: the icon again")
+end)
+
+H.test("a learned buff off wins the icon over a weapon buff", function()
+	local w, ns = WeaponWorld()
+	w.enchant = function() return false end
+	Keep(ns)
+	ns.UpdateBuffMissing()
+	H.eq(ns.missingBuffID, 1459, "Arcane Intellect first")
+	w.auras["Arcane Intellect"] = { auraInstanceID = 7, duration = 1800 }
+	ns.UpdateBuffMissing()
+	H.eq(ns.missingBuffID, 8017, "Arcane Intellect on: the weapon buff")
+end)
+
+H.test("the weapon buff on the grid: the grid entry's own ID, so its icon glows", function()
+	local w, ns = WeaponWorld()
+	w.enchant = function() return false end
+	w.names[8018] = "Rockbiter Weapon"
+	ns.HUDini.spells = { { spellID = 8018 } }
+	ns.UpdateBuffMissing()
+	H.eq(ns.missingBuffID, 8018, "the grid's ID")
+end)
+
+H.test("the icon shows the weapon buff last read on that hand, else the first you know", function()
+	local w, ns = WeaponWorld(function(w)
+		w.names[8024], w.byName["Flametongue Weapon"] = "Flametongue Weapon", 8024
+	end)
+	ns.RegisterClass("TESTER", { weaponBuff = { "Rockbiter Weapon", "Flametongue Weapon" } })
+	w.enchant = function() return false end
+	ns.UpdateBuffMissing()
+	H.eq(ns.missingBuffID, 8017, "none read yet: the first you know")
+	Tooltip(w, { "Sword", "Flametongue 2 (30 min)" })
+	ns.UpdateBuffMissing()
+	H.eq(ns.missingBuffID, nil, "Flametongue on")
+	Tooltip(w, { "Sword" })
+	ns.UpdateBuffMissing()
+	H.eq(ns.missingBuffID, 8024, "it ended: Flametongue, the one you use")
+	w.names[8024] = nil
+	ns.UpdateBuffMissing()
+	H.eq(ns.missingBuffID, 8017, "Flametongue not known: the first you know")
+end)
+
+H.test("an empty off hand or a shield needs no weapon buff; a bare off-hand weapon does", function()
+	local w, ns = WeaponWorld()
+	w.enchant = function() return false end
+	Tooltip(w, { "Sword", "Rockbiter 3 (53 min)" })
+	w:holdItem(17, 2100, 4, 6, "Shield")
+	ns.UpdateBuffMissing()
+	H.eq(ns.missingBuffID, nil, "a shield: nothing")
+	w:holdItem(17, 2101, 2, 7, "Short Sword")
+	local rows = { main = { "Sword", "Rockbiter 3 (53 min)" }, off = { "Short Sword" } }
+	w.env.C_TooltipInfo = { GetInventoryItem = function(_, slot)
+		local list = slot == 16 and rows.main or rows.off
+		local out = {}
+		for i, text in ipairs(list) do out[i] = { leftText = text } end
+		return { lines = out }
+	end }
+	ns.UpdateBuffMissing()
+	H.eq(ns.missingBuffID, 8017, "a bare off-hand sword: the icon, with the main hand's buff")
+end)
+
+-- Two weapons, two buffs: each hand's tooltip per slot (16 main, 17 off).
+local function TwoHands(w, ns)
+	w.names[8024], w.byName["Flametongue Weapon"] = "Flametongue Weapon", 8024
+	ns.RegisterClass("TESTER", { weaponBuff = { "Rockbiter Weapon", "Flametongue Weapon" } })
+	w:holdItem(17, 2101, 2, 7, "Short Sword")
+	local rows = { [16] = { "Sword" }, [17] = { "Short Sword" } }
+	w.env.C_TooltipInfo = { GetInventoryItem = function(_, slot)
+		local out = {}
+		for i, text in ipairs(rows[slot] or {}) do out[i] = { leftText = text } end
+		return { lines = out }
+	end }
+	return rows
+end
+
+H.test("each hand keeps its own last weapon buff", function()
+	local w, ns = WeaponWorld()
+	local rows = TwoHands(w, ns)
+	w.enchant = function() return false end
+	rows[16] = { "Sword", "Rockbiter 3 (53 min)" }
+	rows[17] = { "Short Sword", "Flametongue 2 (30 min)" }
+	ns.UpdateBuffMissing()
+	H.eq(ns.missingBuffID, nil, "both buffed")
+	rows[17] = { "Short Sword" }
+	ns.UpdateBuffMissing()
+	H.eq(ns.missingBuffID, 8024, "the off hand went bare: its Flametongue, not the main hand's Rockbiter")
+	rows[16], rows[17] = { "Sword" }, { "Short Sword", "Flametongue 2 (30 min)" }
+	ns.UpdateBuffMissing()
+	H.eq(ns.missingBuffID, 8017, "the main hand went bare: its Rockbiter")
+end)
+
+H.test("a hand the game calls buffed still remembers its buff from the tooltip", function()
+	local w, ns = WeaponWorld()
+	local rows = TwoHands(w, ns)
+	w:holdItem(17, nil)
+	w.enchant = function() return true end
+	rows[16] = { "Sword", "Flametongue 2 (30 min)" }
+	ns.UpdateBuffMissing()
+	H.eq(ns.missingBuffID, nil, "buffed")
+	w.enchant = function() return false end
+	rows[16] = { "Sword" }
+	ns.UpdateBuffMissing()
+	H.eq(ns.missingBuffID, 8024, "Flametongue, read while the game said buffed")
+end)
+
+H.test("a buffed hand reads no tooltip in a fight", function()
+	local w, ns = WeaponWorld()
+	local rows = TwoHands(w, ns)
+	w:holdItem(17, nil)
+	w.enchant = function() return true end
+	rows[16] = { "Sword", "Flametongue 2 (30 min)" }
+	local get, reads = w.env.C_TooltipInfo.GetInventoryItem, 0
+	w.env.C_TooltipInfo.GetInventoryItem = function(...) reads = reads + 1; return get(...) end
+	w.combat = true
+	H.eq(ns.WeaponBuffMissing(), false, "in a fight: buffed")
+	H.eq(reads, 0, "in a fight: no tooltip read")
+	w.combat = false
+	H.eq(ns.WeaponBuffMissing(), false, "out of a fight: buffed")
+	H.eq(reads, 1, "out of a fight: the tooltip says which buff")
+end)
+
+H.test("a bad saved weapon buff memory is replaced, with no Lua error", function()
+	local w, ns = WeaponWorld()
+	w.enchant = function() return false end
+	ns.ClassDB().weaponBuffLast = "bad"
+	ns.UpdateBuffMissing()
+	H.eq(ns.missingBuffID, 8017, "read as nothing remembered")
+	Tooltip(w, { "Sword", "Rockbiter 3 (53 min)" })
+	ns.UpdateBuffMissing()
+	H.eq(type(ns.ClassDB().weaponBuffLast), "table")
+end)
+
+H.test("the weapon buff icon is back when the fight ends, with combat still set", function()
+	local w, ns = WeaponWorld()
+	w.enchant = function() return false end
+	ns.UpdateBuffMissing()
+	H.eq(ns.missingBuffID, 8017, "out of a fight")
+	w.combat = true
+	w:fire("PLAYER_REGEN_DISABLED")
+	H.eq(ns.missingBuffID, nil, "in a fight: no icon")
+	w:fire("PLAYER_REGEN_ENABLED")
+	H.eq(ns.missingBuffID, 8017, "the fight ended, UnitAffectingCombat still true: the icon")
+end)
+
+H.test("a bare weapon plays no buff sound at a pull", function()
+	local w, ns = WeaponWorld()
+	local db = w.env.HUDiniDB
+	db.warnOwnBuff, db.showHealth = true, true
+	ns.ClassDB().keepUpSound = "raidWarning"
+	local played = 0
+	w.env.PlaySound = function() played = played + 1; return true end
+	w.enchant = function() return false end
+	ns.UpdateBuffMissing()
+	H.eq(ns.missingBuffID, 8017, "out of a fight: the weapon icon")
+	H.eq(played, 0, "out of a fight: no sound")
+	w.combat = true
+	w:fire("PLAYER_REGEN_DISABLED")
+	H.eq(played, 0, "the pull: no sound for the weapon")
+end)
+
+H.test("a weapon put on or a weapon buff cast: the icon looks again at once", function()
+	local w, ns = WeaponWorld()
+	w.enchant = function() return false end
+	ns.UpdateBuffMissing()
+	H.eq(ns.missingBuffID, 8017, "bare")
+	Tooltip(w, { "Sword", "Rockbiter 3 (53 min)" })
+	w:fire("UNIT_INVENTORY_CHANGED", "player")
+	H.eq(ns.missingBuffID, nil, "UNIT_INVENTORY_CHANGED: looked again")
+	w:holdItem(16, nil)
+	Tooltip(w, {})
+	w:fire("PLAYER_EQUIPMENT_CHANGED", 16)
+	H.eq(ns.missingBuffID, nil, "no weapon: nothing")
+	w:holdItem(16, 2000, 2, 7, "Sword")
+	Tooltip(w, { "Sword" })
+	w:fire("PLAYER_EQUIPMENT_CHANGED", 16)
+	H.eq(ns.missingBuffID, 8017, "PLAYER_EQUIPMENT_CHANGED: a bare weapon again")
 end)

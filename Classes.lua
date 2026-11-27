@@ -13,10 +13,21 @@
 			--          { "Pummel", "Shield Bash" }: the first you can cast now
 			dispel    = { Curse = "Remove Lesser Curse" }, -- one spell per debuff type
 			purge     = "Purge",                       -- takes any magic buff, or
-			--          { spell = "Spellsteal", stealable = true } for stealable only
+			--          { spell = "Spellsteal", stealable = true } for stealable only, or
+			--          { spell = "Tranquilizing Shot", enrage = true } for an Enrage only
 			keepUp    = { "Ice Barrier" },             -- icon by your health when none is up in a fight
+			notInFight = { "Aspect of the Cheetah" },  -- in a fight, while one is on, the
+			--          icon of your last keep-up buff not in this list (TICK-0196).
+			--          Each name is also a keep-up name. Only with the keep-up alert on
 			resource  = { aura = "Name", max = 5 },    -- buff stacks, or
-			--          { power = "ComboPoints", onlyWith = "ENERGY" }, or nil
+			--          { power = "ComboPoints", onlyWith = "ENERGY" }, or
+			--          { { aura = "A", max = 5 }, { aura = "B", max = 3 } }:
+			--          the first buff on you, or nil. A buff counts only while
+			--          it is on you or you know its spell (TICK-0199). An entry
+			--          may add prefer = true: in a list it wins while its buff
+			--          is on you or yours to get (a talent rank), before the
+			--          first on you; and filter = "HARMFUL": it counts a debuff's
+			--          stacks on you, not a buff's (TICK-0238)
 			auraMap   = { ["Spell"] = { "Buff" } },    -- extra buff names per icon
 			weaponBuff = { "Rockbiter Weapon" },       -- know one, and each weapon needs one
 			powers    = { "MANA" },                    -- every power the class can show
@@ -26,6 +37,20 @@
 			--          until you save a choice; any spell the page offers (D-047)
 			keepUpSoundOn = true,                      -- the buff-missing sound starts on, with
 			--          the default sound, until you save a choice (D-047)
+			trackBuff = { "Arcane Intellect" },        -- tracked buffs from the start, as if
+			--          HUDini had seen each on you; each once, when you know it (TICK-0204)
+			formQuiet = { "Travel Form" },             -- forms that cannot cast a buff: while
+			--          you are in one, no buff-missing icon, red edge or sound (TICK-0197).
+			--          Limit: in a fight started out of these forms, the game's own
+			--          sound stays on the buff, so it can still sound in one
+			formQuietSound = { "Bear Form" },          -- forms that keep the buff-missing
+			--          icon, with no sound in a fight (TICK-0197). Limit: a form you
+			--          change to in a fight still gets the game's sound if a fight
+			--          started out of these forms
+			tankBuff  = { buff = "Righteous Fury", with = { "Seal of Fury" } }, -- in a
+			--          fight, an icon by your health when buff is off while one of with
+			--          is on: the tell that you tank (TICK-0208). Starts on; a "Your
+			--          class" row turns it off
 			missingItem = {                            -- an icon by your health bar, out of a
 				--     fight, when your bags hold none of the row's items (TICK-0182):
 				{ key = "manaGem", make = "Conjure Mana Gem", items = { 5514 }, on = true },
@@ -34,7 +59,24 @@
 				--     spells that use it; it never wakes the HUD. items: item IDs, any
 				--     one counts. on: starts on until you save a choice. An optional
 				--     buff = "Soulstone Resurrection": that buff on you counts as one.
+				--     An optional few = 3: under 3 (all items added) shows the icon,
+				--     with the count on it (TICK-0207); only none wakes the HUD.
 			},
+			pet       = { revive = "Revive Pet", call = { "Call Pet" }, feed = "Feed Pet" }, -- an
+			--          icon by your health bar when your pet needs you (TICK-0192): out of a
+			--          fight, revive for a dead pet and feed for an unhappy one; call for
+			--          none out: the one you cast last, else the first you know. An optional
+			--          sacrifice = { "Burning Wish" }: a buff on you that means no pet is
+			--          your choice. An optional buffs = { "Soul Link" }: learned buffs that
+			--          count as missing only while a live pet is out (Auras.lua). Starts
+			--          on; a "Your class" row turns it off
+			barLooks  = { resource = { gradient = "darker" } }, -- default looks of the
+			--          class's bars (TICK-0224, BarLooks.lua): the class resource bar, and
+			--          timer = { ["Evocation"] = { texture = "flat" } } for a cooldown's
+			--          timer bar. Each look has any of texture ("same", a Bar texture key,
+			--          or an Interface\ path), gradient ("off", "darker", "lighter",
+			--          "color") and color ({ r, g, b }: the To a color end). Left out:
+			--          Same as Bar texture, Off (today's look)
 			ids       = { ["Counterspell"] = 2139 },   -- enUS name -> a spell ID, any rank
 		})
 
@@ -441,7 +483,15 @@ local function ProfileSpells(p)
 	end
 	if type(p.purge) == "table" then Add(p.purge.spell) else Add(p.purge) end
 	AddAll(p.keepUp)
-	if type(p.resource) == "table" then Add(p.resource.aura) end
+	if type(p.resource) == "table" then
+		if p.resource.aura or p.resource.power then
+			Add(p.resource.aura)
+		else
+			for _, e in ipairs(p.resource) do
+				if type(e) == "table" then Add(e.aura) end
+			end
+		end
+	end
 	if type(p.auraMap) == "table" then
 		for k, list in pairs(p.auraMap) do
 			Add(k)
@@ -450,6 +500,21 @@ local function ProfileSpells(p)
 	end
 	AddAll(p.weaponBuff)
 	AddAll(p.readyAlert)
+	AddAll(p.trackBuff) -- TICK-0204
+	AddAll(p.notInFight) -- TICK-0196
+	AddAll(p.formQuiet) -- TICK-0197
+	AddAll(p.formQuietSound)
+	if type(p.tankBuff) == "table" then -- TICK-0208
+		Add(p.tankBuff.buff)
+		AddAll(p.tankBuff.with)
+	end
+	if type(p.pet) == "table" then -- TICK-0192
+		Add(p.pet.revive)
+		AddAll(p.pet.call)
+		Add(p.pet.feed)
+		AddAll(p.pet.sacrifice)
+		AddAll(p.pet.buffs)
+	end
 	if type(p.missingItem) == "table" then
 		for _, row in ipairs(p.missingItem) do
 			if type(row) == "table" then
@@ -585,6 +650,9 @@ end
 -- time you log in on it.
 function ns.FillClassSettings()
 	local db = HUDiniDB
+	ns.MigrateCooldowns(db)
+	-- After MigrateCooldowns, which turns an old true into a key.
+	if ns.MigrateSounds then ns.MigrateSounds(db) end
 	local mine = ns.ClassDB()
 
 	-- Each class keeps its own grid position. A class seen for the first time
@@ -720,19 +788,36 @@ function ns.SetClassPick(key, pick, dispelType)
 end
 
 --------------------------------------------------------------------------------
--- Cooldown ready alerts (TICK-0157, GitHub #1)
+-- Cooldowns (TICK-0157, GitHub #1; D-048, TICK-0203)
 --
--- A spell you turn on plays a sound, and its icon on the HUD glows, when its
--- cooldown ends (Alerts.lua, section 9). Each spell is off until you turn it
--- on, unless the class file's readyAlertOn names it: then it starts on
--- until you save a choice (D-047, TICK-0181). The class file's readyAlert
--- list is what the page offers first, then every other spell you learned
--- that has a cooldown and every readyAlertOn spell you know (TICK-0162,
--- D-042).
--- Saved per class, off as false so it wins over a start of on:
---   HUDiniDB.classes[token].readyAlerts = { ["Name"] = true | false }
+-- Each spell has three parts, each on its own switch: a glow on its HUD
+-- icon and a sound when its cooldown ends (Alerts.lua, section 9), and a
+-- timer bar while it runs (TimerBars.lua, below). Glow and sound are off
+-- until you turn them on, unless the class file's readyAlertOn names the
+-- spell: then it starts with the glow on and your old sound (ClassSoundKey)
+-- until you save a choice (D-047, TICK-0181). The class
+-- file's readyAlert list is what the page offers first, then every other
+-- spell you learned that has a cooldown, every readyAlertOn spell you know,
+-- and any spell with a part saved on (TICK-0162, D-042).
+-- Saved per class; off as false, so it wins over a start of on:
+--   HUDiniDB.classes[token].readyGlow   = { ["Name"] = true | false }
+--   HUDiniDB.classes[token].readySounds = { ["Name"] = choice | false }
+--   HUDiniDB.classes[token].readySoundLast = { ["Name"] = choice }
+-- Each spell saves its own sound choice, { key = "soundKey", volume = 50 }
+-- (Sounds.lua, TICK-0232); a bare key from before becomes one at login
+-- (ns.MigrateSounds). The class's sound (readySound, the
+-- old Bell sound pick) has no control on the page (TICK-0203 review,
+-- designer's call): it stays as your old sound, which nothing changes any
+-- more. A true saved by an older build (it played the class's sound)
+-- becomes that key at login (ns.MigrateCooldowns), and a spell the class
+-- file starts on with nothing saved plays it, so each rings as before.
+-- With none saved, or a key that left the list, it is the default.
+-- readySoundLast keeps the
+-- sound a spell had when it was turned off, for the setup box's On
+-- (ns.SetReadyAlert).
 -- The name is the one the page offered (the client's language). Before
--- TICK-0181 an Off saved nothing, so it reads as the class file's start.
+-- TICK-0203 one switch (readyAlerts) gave the glow and one shared sound
+-- together: ns.MigrateCooldowns turns it into the two tables.
 --------------------------------------------------------------------------------
 
 -- Every spell you learned with a cooldown of its own, A to Z, from your
@@ -920,10 +1005,10 @@ function ns.LearnedCooldownSpells()
 end
 
 -- The spells to offer: the class file's list in its order, then every
--- other spell you learned with a cooldown and any other spell you turned
--- on, together A to Z. Each once. The second value is how many of the
--- first are the class file's, for the page to group them.
-function ns.ReadyAlertSpells()
+-- other spell you learned with a cooldown and any other spell with a part
+-- saved on, together A to Z. Each once. The second value is how many of
+-- the first are the class file's, for the page to group them.
+function ns.CooldownSpells()
 	local out, seen = {}, {}
 	local list = ns.ClassDefault("readyAlert")
 	if type(list) == "table" then
@@ -951,25 +1036,25 @@ function ns.ReadyAlertSpells()
 			if not ns.KnownSpell or ns.KnownSpell(name) then Add(name) end
 		end
 	end
-	local saved = HUDiniDB and ns.ClassDB().readyAlerts
-	if type(saved) == "table" then
-		for name, on in pairs(saved) do
-			if on == true then Add(name) end
+	local mine = HUDiniDB and ns.ClassDB()
+	for _, key in ipairs({ "readyGlow", "readySounds", "timerBars" }) do
+		local saved = mine and mine[key]
+		if type(saved) == "table" then
+			for name, on in pairs(saved) do
+				if on then Add(name) end
+			end
 		end
 	end
 	table.sort(extra)
 	for _, name in ipairs(extra) do out[#out + 1] = name end
 	return out, classCount
 end
+-- The name before TICK-0203; the page may still ask for it.
+ns.ReadyAlertSpells = function() return ns.CooldownSpells() end
 
--- True when the ready alert for this spell name is on: your saved choice,
--- else true when the class file's readyAlertOn names it (D-047).
-function ns.GetReadyAlert(spell)
-	if type(spell) ~= "string" or not HUDiniDB then return false end
-	local saved = ns.ClassDB().readyAlerts
-	local mine
-	if type(saved) == "table" then mine = saved[spell] end
-	if mine ~= nil then return mine == true end
+-- True when the class file's readyAlertOn names this spell: with nothing
+-- saved, its glow is on and it plays the default sound (D-047).
+local function StartsOn(spell)
 	local starts = ns.ClassDefault("readyAlertOn")
 	if type(starts) ~= "table" then return false end
 	for _, name in ipairs(starts) do
@@ -978,18 +1063,182 @@ function ns.GetReadyAlert(spell)
 	return false
 end
 
--- Turn one spell's ready alert on or off. True if it changed. The watch
--- (Alerts.lua) takes the change at once.
-function ns.SetReadyAlert(spell, on)
-	if type(spell) ~= "string" or spell == "" or not HUDiniDB then return false end
-	on = on and true or false
-	if ns.GetReadyAlert(spell) == on then return false end
+local function SavedPart(key, spell)
+	local saved = ns.ClassDB()[key]
+	if type(saved) == "table" then return saved[spell] end
+	return nil
+end
+
+-- Save one part's choice (false is off). The watch (Alerts.lua) takes the
+-- change at once.
+local function Save(key, spell, value)
 	local mine = ns.ClassDB()
-	mine.readyAlerts = type(mine.readyAlerts) == "table" and mine.readyAlerts or {}
-	-- Off saves false, so it wins over the class file's start (D-047).
-	mine.readyAlerts[spell] = on
+	mine[key] = type(mine[key]) == "table" and mine[key] or {}
+	mine[key][spell] = value
 	if ns.RefreshReadyAlerts then ns.RefreshReadyAlerts() end
+end
+
+local function Valid(spell)
+	return type(spell) == "string" and spell ~= "" and HUDiniDB ~= nil
+end
+
+-- True when this spell's icon glows when its cooldown ends.
+function ns.GetCooldownGlow(spell)
+	if not Valid(spell) then return false end
+	local mine = SavedPart("readyGlow", spell)
+	if mine ~= nil then return mine == true end
+	return StartsOn(spell)
+end
+
+-- Turn one spell's glow on or off. True if it changed.
+function ns.SetCooldownGlow(spell, on)
+	if not Valid(spell) then return false end
+	on = on and true or false
+	if ns.GetCooldownGlow(spell) == on then return false end
+	-- Off saves false, so it wins over the class file's start (D-047).
+	Save("readyGlow", spell, on)
 	return true
+end
+
+-- The key a class's spells played before each kept its own: the class's
+-- sound (readySound, the old Bell sound pick) while it is in the list, else
+-- the default.
+local function ClassSoundKey(mine)
+	local key = mine.readySound
+	if ns.IsSoundKey and ns.IsSoundKey(key) then return key end
+	return ns.READY_SOUND_DEFAULT
+end
+
+-- The sound saved for a spell as it stands: a choice (a new table: key and
+-- volume), or false (off). Nothing saved is your old sound (ClassSoundKey)
+-- at full volume for a spell the class file starts on, else off. A true
+-- left over (MigrateCooldowns runs first) is the default. A key that left
+-- the list plays the default.
+local function SoundChoice(spell)
+	local mine = SavedPart("readySounds", spell)
+	if mine == nil then
+		if not StartsOn(spell) then return false end
+		mine = ClassSoundKey(ns.ClassDB())
+	end
+	return ns.SoundChoice(mine, ns.READY_SOUND_DEFAULT) or false
+end
+
+-- The sound this spell plays when its cooldown ends: a choice (key and
+-- volume), or false when off.
+function ns.GetCooldownSoundValue(spell)
+	if not Valid(spell) then return false end
+	return SoundChoice(spell)
+end
+
+-- The same as a key of ns.SoundKeys(), or "off".
+function ns.GetCooldownSound(spell)
+	local c = ns.GetCooldownSoundValue(spell)
+	return c and c.key or "off"
+end
+
+-- Save a sound choice (a choice or false). Going off keeps the choice it
+-- had in readySoundLast. True if it changed.
+local function SaveSound(spell, choice)
+	local was = SoundChoice(spell)
+	if ns.SameSound(was, choice) then return false end
+	if choice == false then
+		local mine = ns.ClassDB()
+		mine.readySoundLast = type(mine.readySoundLast) == "table" and mine.readySoundLast or {}
+		mine.readySoundLast[spell] = was
+	end
+	Save("readySounds", spell, choice)
+	return true
+end
+
+-- Pick one spell's sound: "off" or false, a key of ns.SoundKeys() (at the
+-- volume the spell has now, or had when turned off, else full), or a choice; it is the spell's own.
+-- Any other key changes nothing. True if it changed.
+function ns.SetCooldownSound(spell, pick)
+	if not Valid(spell) then return false end
+	if pick == "off" or pick == false then return SaveSound(spell, false) end
+	local now = SoundChoice(spell)
+	if not now then now = ns.SoundChoice(SavedPart("readySoundLast", spell), ns.READY_SOUND_DEFAULT) end
+	local c = type(pick) == "table" and ns.NewSoundChoice(pick.key, pick.volume)
+		or ns.NewSoundChoice(pick, now and now.volume)
+	if not c then return false end
+	return SaveSound(spell, c)
+end
+
+-- True when a part of this spell (glow, sound, timer bar) is saved on: the
+-- page keeps its row, known or not.
+function ns.CooldownSaved(spell)
+	if not Valid(spell) then return false end
+	return SavedPart("readyGlow", spell) == true
+		or type(SavedPart("readySounds", spell)) == "string"
+		or type(SavedPart("readySounds", spell)) == "table"
+		or SavedPart("readySounds", spell) == true
+		or SavedPart("timerBars", spell) == true
+end
+
+-- The setup box's one switch (Setup.lua): on when the glow is on or a
+-- sound plays. On turns the glow on and, when no sound plays, the sound it
+-- had when turned off, else the default sound; off turns both off. The
+-- timer bar is not touched. True if it changed.
+function ns.GetReadyAlert(spell)
+	return ns.GetCooldownGlow(spell) or ns.GetCooldownSound(spell) ~= "off"
+end
+
+function ns.SetReadyAlert(spell, on)
+	if not Valid(spell) then return false end
+	on = on and true or false
+	local glow, sound = ns.GetCooldownGlow(spell), ns.GetCooldownSound(spell)
+	if on then
+		if glow and sound ~= "off" then return false end
+		ns.SetCooldownGlow(spell, true)
+		if sound == "off" then
+			local last = SavedPart("readySoundLast", spell)
+			SaveSound(spell, ns.SoundChoice(last or true, ns.READY_SOUND_DEFAULT))
+		end
+	else
+		if not glow and sound == "off" then return false end
+		ns.SetCooldownGlow(spell, false)
+		ns.SetCooldownSound(spell, "off")
+	end
+	return true
+end
+
+-- Saved picks from before TICK-0203 (D-048): readyAlerts[name] = true gave
+-- the glow and the class's one shared sound; false turned both off. Each
+-- becomes a glow and a sound of its own, the sound being the key the class
+-- played (ClassSoundKey), so it rings as before. A part already saved in
+-- the new tables wins. The timer bar was already its own table (timerBars),
+-- so "bar" needs nothing and "both" gets all three. A build between
+-- TICK-0203 and its review fix saved a sound of true (the class's sound) in
+-- readySounds and readySoundLast: it becomes that key too. Runs at each
+-- login for every class's table, and is safe to run again.
+function ns.MigrateCooldowns(db)
+	if type(db) ~= "table" or type(db.classes) ~= "table" then return end
+	for _, mine in pairs(db.classes) do
+		if type(mine) == "table" then
+			local key = ClassSoundKey(mine)
+			if mine.readyAlerts ~= nil then
+				local old = mine.readyAlerts
+				if type(old) == "table" then
+					for name, on in pairs(old) do
+						if type(name) == "string" and name ~= "" and type(on) == "boolean" then
+							mine.readyGlow = type(mine.readyGlow) == "table" and mine.readyGlow or {}
+							mine.readySounds = type(mine.readySounds) == "table" and mine.readySounds or {}
+							if mine.readyGlow[name] == nil then mine.readyGlow[name] = on end
+							if mine.readySounds[name] == nil then mine.readySounds[name] = on and key end
+						end
+					end
+				end
+				mine.readyAlerts = nil
+			end
+			for _, part in ipairs({ "readySounds", "readySoundLast" }) do
+				if type(mine[part]) == "table" then
+					for name, sound in pairs(mine[part]) do
+						if sound == true then mine[part][name] = key end
+					end
+				end
+			end
+		end
+	end
 end
 
 --------------------------------------------------------------------------------
@@ -1159,9 +1408,16 @@ function ns.ClassDefaultName(key, dispelType)
 		end
 		return nil, true
 	elseif key == "resource" then
+		-- The class file's resource the bar would show (Bars.lua: on you,
+		-- else known);
+		-- when you know none of the class file's buffs yet, true.
 		if type(default) ~= "table" then return nil end
-		if default.power then return ns.PowerName(default.power) end
-		return default.aura and tostring(default.aura) or nil
+		local list = (default.aura or default.power) and { default } or default
+		if #list == 0 then return nil end
+		local now = ns.ClassFileResource and ns.ClassFileResource()
+		if now and now.power then return ns.PowerName(now.power) end
+		if now and now.aura then return tostring(now.aura) end
+		return nil, true
 	end
 	if default == nil then return nil end
 	return AsPick(key, default)

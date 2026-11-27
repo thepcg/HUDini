@@ -14,6 +14,7 @@
 
 		M:On("PLAYER_MONEY", fn)          -- fn(event, ...) while the module is on
 		M:On({ "A", "B" }, fn)            -- one handler for several events
+		M:On("UNIT_HEALTH", fn, "player") -- only for these units (one or two)
 		M:Every(5, fn)                    -- a ticker; only while on
 		M:After(0.5, fn)                  -- a one-shot timer; dropped when it goes off
 		M:CreateFrame(type, name, parent) -- a frame, counted by /hud debug modules
@@ -65,7 +66,7 @@ function ns.NewModule(name, spec)
 	local M = setmetatable({
 		name = name, label = spec.label or name, setting = spec.setting, isOn = spec.isOn,
 		enabled = false, gen = 0,
-		handlers = {}, tickers = {}, timers = {}, frames = {},
+		handlers = {}, units = {}, tickers = {}, timers = {}, frames = {},
 	}, Module)
 	modules[#modules + 1] = M
 	byName[name] = M
@@ -80,12 +81,26 @@ local function Dispatch(frame, event, ...)
 	if fn then fn(event, ...) end
 end
 
-function Module:On(events, fn)
+-- Register one listed event on the module's frame: for its units only
+-- when it names some (TICK-0239), so a unit event of every unit nearby
+-- does not wake the handler.
+local function Register(M, event)
+	local units = M.units[event]
+	if units then
+		pcall(M.frame.RegisterUnitEvent, M.frame, event, unpack(units))
+	else
+		pcall(M.frame.RegisterEvent, M.frame, event)
+	end
+end
+
+function Module:On(events, fn, ...)
 	if type(events) == "string" then events = { events } end
+	local units = select("#", ...) > 0 and { ... } or nil
 	for _, event in ipairs(events) do
 		self.handlers[event] = fn
+		self.units[event] = units
 		-- Listed while on: register it now.
-		if self.enabled and self.frame then pcall(self.frame.RegisterEvent, self.frame, event) end
+		if self.enabled and self.frame then Register(self, event) end
 	end
 end
 
@@ -136,7 +151,7 @@ local function Enable(M)
 			M.frame.module = M
 			M.frame:SetScript("OnEvent", Dispatch)
 		end
-		for event in pairs(M.handlers) do pcall(M.frame.RegisterEvent, M.frame, event) end
+		for event in pairs(M.handlers) do Register(M, event) end
 	end
 	local pew = M.handlers.PLAYER_ENTERING_WORLD
 	if inWorld and pew and M.enabled then Call(pew, "PLAYER_ENTERING_WORLD", false, false, true) end

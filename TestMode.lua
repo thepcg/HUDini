@@ -62,7 +62,7 @@ end
 -- A sample colour, and a cleared cache: the next real fill sets its own
 -- colour again (Bars.lua sets the colour only when shownColor changes).
 local function SampleColor(bar, color)
-	bar:SetStatusBarColor(unpack(color))
+	ns.PaintBar(bar, color)
 	bar.shownColor = nil
 end
 

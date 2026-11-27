@@ -1,6 +1,7 @@
 -- Long buffs for one job (TICK-0064): Unending Breath, Water Walking, Water
 -- Breathing, the Warlock's Detect Invisibility group, Righteous Fury, the
--- priest's Fear Ward and Shadow Protection pair. You cast one when the job
+-- priest's Fear Ward and Shadow Protection pair, the mage's Amplify Magic and
+-- Dampen Magic (TICK-0206). You cast one when the job
 -- comes, so after it ends nothing is missing. Arcane Intellect (1 hour) is
 -- a buff to keep up: it is still learned, and missing when it ends.
 
@@ -16,6 +17,8 @@ local NAMES = {
 	[9] = "Fear Ward",
 	[10] = "Shadow Protection",
 	[11] = "Prayer of Shadow Protection",
+	[12] = "Amplify Magic",
+	[13] = "Dampen Magic",
 }
 
 local CLASS = {
@@ -30,6 +33,8 @@ local CLASS = {
 	["Fear Ward"] = { "PRIEST", "Priest" },
 	["Shadow Protection"] = { "PRIEST", "Priest" },
 	["Prayer of Shadow Protection"] = { "PRIEST", "Priest" },
+	["Amplify Magic"] = { "MAGE", "Mage" },
+	["Dampen Magic"] = { "MAGE", "Mage" },
 }
 
 local function IDOf(name)
@@ -40,6 +45,8 @@ end
 
 -- A world for the class that casts name. w.auras[name] = duration: the buff
 -- is on you, cast by you, and a lookup by name or by index finds it.
+-- opts.only: you know name only, so a buff the class file tracks from the
+-- start (TICK-0204: the Mage's Arcane Intellect) is not missing.
 local function World(name, opts)
 	opts = opts or {}
 	local w = H.world()
@@ -51,7 +58,10 @@ local function World(name, opts)
 		local id = IDOf(n)
 		if id then return { spellID = id } end
 	end
-	env.IsPlayerSpell = function(id) return NAMES[id] ~= nil end
+	env.IsPlayerSpell = function(id)
+		if opts.only then return NAMES[id] == name end
+		return NAMES[id] ~= nil
+	end
 
 	w.auras = {}
 	local function Aura(n)
@@ -102,12 +112,14 @@ for _, case in ipairs({
 	{ "Fear Ward", 600 },
 	{ "Shadow Protection", 600 },
 	{ "Prayer of Shadow Protection", 1200 },
+	{ "Amplify Magic", 600 },
+	{ "Dampen Magic", 600 },
 }) do
 	local name, duration = case[1], case[2]
 	for _, grid in ipairs({ false, true }) do
 		local where = grid and "from the grid" or "off the grid"
 		H.test(name .. ", cast " .. where .. " and ended, is not learned or missing", function()
-			local w, ns = World(name, { grid = grid })
+			local w, ns = World(name, { grid = grid, only = true })
 			local learned, missing, icon = CastAndEnd(w, ns, name, duration)
 			H.eq(learned, nil, name .. ": learned")
 			H.eq(missing, false, name .. ": missing after it ends")
@@ -131,4 +143,15 @@ H.test("a one-job buff learned before is dropped at login; a buff to keep up sta
 	H.eq(Learned(ns2)["Unending Breath"], nil, "Unending Breath dropped")
 	H.eq(Learned(ns2)["Arcane Intellect"], true, "Arcane Intellect stays")
 	H.eq(ns2.missingBuffID, 7, "the icon is for Arcane Intellect, not the dropped buff")
+end)
+
+H.test("a Mage's Dampen Magic learned by an older build is dropped at login", function()
+	local w, ns = World("Dampen Magic")
+	ns.ClassDB().buffSpells = { ["Dampen Magic"] = 600, ["Amplify Magic"] = 600, ["Arcane Intellect"] = 3600 }
+	local _, ns2 = World("Dampen Magic", { db = w.env.HUDiniDB })
+	ns2.UpdateBuffMissing()
+	H.eq(Learned(ns2)["Dampen Magic"], nil, "Dampen Magic dropped")
+	H.eq(Learned(ns2)["Amplify Magic"], nil, "Amplify Magic dropped")
+	H.eq(Learned(ns2)["Arcane Intellect"], 3600, "Arcane Intellect stays")
+	H.eq(ns2.missingBuffID, 7, "the icon is for Arcane Intellect")
 end)

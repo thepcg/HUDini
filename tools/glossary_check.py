@@ -94,7 +94,12 @@ EXACT = [
     ("Shield Wall", "Classes/Warrior.lua", "the Warrior spell"),
     ("Divine Shield", "Classes/Paladin.lua", "the Paladin spell"),
     ("Lightning Shield", "Classes/Shaman.lua", "the Shaman spell"),
+    ("Water Shield", "Classes/Shaman.lua", "the Shaman spell"),
     ("Auto", "Locales/enUS.lua", "the feed's Line side choice, not class default"),
+    ("Kick", "Alerts.lua", "a voice clip file name (D-050)"),
+    ("Shield", "Alerts.lua", "a voice clip file name (D-050)"),
+    ("Voice: Kick", "Locales/enUS.lua", "the voice clip says it (D-050)"),
+    ("Voice: Shield", "Locales/enUS.lua", "the voice clip says it (D-050)"),
 ]
 
 # Comment, long string, short string, "..", a name, or one other character.

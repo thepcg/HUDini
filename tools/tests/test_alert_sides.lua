@@ -113,6 +113,7 @@ end
 local function OwnBuffOff(ns, on)
 	ns.UpdateBuffMissing = function()
 		ns.missingBuffID = on and AI or nil
+		ns.missingBuffIDs = on and { AI } or {}
 		ns.buffMissing = on and true or false
 		ns.UpdateOwnBuffIcon()
 	end
@@ -138,6 +139,7 @@ end)
 H.test("No bait shows left of your health bar, and its words left of it", function()
 	local w, ns = World()
 	local bar = ns.GetBar("health")
+	ns.ClassDB().buffSpells = {} -- the bait alone: no learned buff off
 	BarePole(w)
 	local chain = LeftChain(w, bar)
 	H.eq(Names(chain), "bait")

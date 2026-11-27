@@ -1,0 +1,13 @@
+<Ui xmlns="http://www.blizzard.com/wow/ui/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.blizzard.com/wow/ui/ ..\FrameXML\UI.xsd">
+	<!-- The Cooldowns row of Options > Your class (TICK-0203, D-048): the
+	     game's list element, with its label, label tooltip and hover, and
+	     the game's mixin, whose OnLoad makes the row's callback list. It
+	     adds no mixin and no global of HUDini's: Options.lua draws the
+	     three controls on it (InitGrid). -->
+	<Frame name="HUDiniCooldownRowTemplate" inherits="SettingsListElementTemplate" virtual="true">
+		<Size x="280" y="26"/>
+		<Scripts>
+			<OnLoad method="OnLoad"/>
+		</Scripts>
+	</Frame>
+</Ui>

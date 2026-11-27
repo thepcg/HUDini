@@ -443,6 +443,116 @@ function ns.FeedTest()
 end
 
 --------------------------------------------------------------------------------
+-- Hard lines, for a look at the layout: /hud debug feed (TICK-0228)
+--------------------------------------------------------------------------------
+
+-- Short sample lines hide layout bugs (TICK-0227: coins on a wrapped line).
+-- These lines wrap to 2 and 3 lines at the feed's width and size, put money
+-- in and at the end of a wrapped line, every item quality color, inline
+-- icons, nested colors and odd characters, and go through F.Line as real
+-- lines do. They add only lines: no saved data, no session totals, and
+-- nothing secret, so they work in a fight. The text is test data, in
+-- English: the shapes are the point, not the words.
+
+-- locale: skip test data (/hud debug feed), in English
+local FILLER = { "the", "quick", "brown", "fox", "jumps", "over", "a", "lazy", "dog", "by", "the",
+	"old", "mill", "while", "the", "frogs", "sing", "far", "too", "loudly" }
+-- The game's item quality colors, poor to heirloom, and an item name each.
+local QUALITY = {
+	{ "9d9d9d", "Broken Fang" }, { "ffffff", "Light Leather" }, { "1eff00", "Ring of the Fox" },
+	{ "0070dd", "Blade of the Deep" }, { "a335ee", "Helm of Storms" }, { "ff8000", "Axe of Ages" },
+	{ "e6cc80", "Relic of the Past" }, { "00ccff", "Heirloom Shoulders" },
+}
+local LONG_ITEM = "|cffa335ee[Gauntlets of the Unending Thousand-Year Storm Above the Sky]|r x2"
+local NESTED = "Plain, |cffff4040red, |cff40ff40green inside the red|r, red again|r, plain again,"
+	.. " |cff4080ff|cffffd000gold in blue|r blue|r, |r a stray end, plain."
+local SPECIAL = "100% sure, 50 %s and %d left as they are, a || pipe, \"double\" and 'single' quotes,"
+	.. " a back\\slash, é ü ß ñ Å, 1,234,567 and 9.876.543 and 12 345."
+local MARK = "|TInterface\\TargetingFrame\\UI-RaidTargetingIcon_%d:0|t"
+local QUEST_Q = "|TInterface\\GossipFrame\\ActiveQuestIcon:0|t"
+local QUEST_BANG = "|TInterface\\GossipFrame\\AvailableQuestIcon:0|t"
+local CLASS = "|TInterface\\GLUES\\CHARACTERCREATE\\UI-CHARACTERCREATE-CLASSES:0:0:0:0:256:256:0:64:0:64|t"
+local SPELL = "|TInterface\\Icons\\Spell_Nature_Sleep:0|t"
+local ATLAS = "|A:classicon-mage:%d:%d|a"
+local BAG = "Interface\\Icons\\INV_Misc_Bag_10"
+
+-- The lines, in the order they come in: the wrap checks last, as a feed
+-- with fewer lines than these shows only the newest. text: a string, or
+-- { n, base, tail } for a line filled with words to n lines (tail last).
+-- The money and the font size are put in when the command runs.
+local function DebugLines(px)
+	local qualities = {}
+	for i, q in ipairs(QUALITY) do qualities[i] = ("|cff%s[%s]|r"):format(q[1], q[2]) end
+	local marks = {}
+	for i = 1, 8 do marks[i] = MARK:format(i) end
+	return {
+		{ kind = "quest", icon = F.ICON.quest, color = C.quest, text = "Icons: marks " .. table.concat(marks)
+			.. ", quest " .. QUEST_Q .. " " .. QUEST_BANG .. ", class " .. CLASS .. ", spell " .. SPELL
+			.. ", atlas " .. ATLAS:format(px, px) .. ", end." },
+		{ kind = "xp", icon = F.ICON.xp, color = C.xp, text = NESTED },
+		{ kind = "rep", icon = F.ICON.rep, color = C.up, text = SPECIAL },
+		{ kind = "loot", icon = BAG, text = "A long name: " .. LONG_ITEM },
+		{ kind = "gear", icon = F.ICON.gear, color = C.bad, text = { 3, "Gear: |cff1eff00[Ring of the Fox]|r"
+			.. " repaired for " .. F.Coins(4321) .. " in the middle of a long line," } },
+		{ kind = "loot", icon = BAG, text = { 3, "Every quality: " .. table.concat(qualities, " ") } },
+		{ kind = "money", icon = F.ICON.money, text = { 2, "Money first, then a long line: + " .. F.Coins(1234567) } },
+		{ kind = "money", icon = F.ICON.money, text = { 2, "Money at the very end of a wrapped line:", " + " .. F.Coins(98765) } },
+	}, "Big highlight with a long text: Level 60, " .. LONG_ITEM .. " and " .. F.Coins(1234567)
+end
+-- locale: end
+
+-- A width in pixels with the text on one line, or nil when the game gives none.
+local function OneLineWidth(fs, text)
+	local width = fs.GetUnboundedStringWidth or fs.GetStringWidth
+	if not (width and pcall(fs.SetText, fs, text)) then return nil end
+	local ok, w = pcall(width, fs)
+	w = ok and Plain(w) or nil
+	return type(w) == "number" and w or nil
+end
+
+-- A line's text that adds words to base until it needs about n lines at
+-- the line's own width, then tail. Built once per line, at its first draw.
+local function Fill(n, base, tail)
+	tail = tail or ""
+	return function(L)
+		if L.filled then return L.filled end
+		local fs = L.fs
+		local ok, room = pcall(fs.GetWidth, fs)
+		room = ok and Plain(room) or nil
+		if type(room) ~= "number" or room <= 0 then room = 300 end
+		local text = base
+		for i = 1, 20 * n do
+			local w = OneLineWidth(fs, text .. tail)
+			-- Half a line past n - 1 lines: n lines, wrapped at any word.
+			if w and w >= (n - 0.5) * room then break end
+			if not w and i > 12 * n then break end
+			text = text .. " " .. FILLER[(i - 1) % #FILLER + 1]
+		end
+		L.filled = text .. tail
+		return L.filled
+	end
+end
+
+-- /hud debug feed. Returns how many lines F.Line took (a kind that is off
+-- takes none).
+function ns.FeedDebug()
+	local db = HUDiniDB
+	if not (db and db.showFeed) then
+		ns.Say(Text("feed.offForTest"))
+		return 0
+	end
+	local lines, big = DebugLines(math.floor(tonumber(db.feedFontSize) or 14))
+	local sent = 0
+	for _, spec in ipairs(lines) do
+		if type(spec.text) == "table" then spec.text = Fill(spec.text[1], spec.text[2], spec.text[3]) end
+		if F.Line(spec) then sent = sent + 1 end
+	end
+	F.Highlight({ text = big, icon = F.ICON.level, color = C.level })
+	ns.Say(Text("debug.feedSent", sent))
+	return sent
+end
+
+--------------------------------------------------------------------------------
 -- Sample lines while HUDini setup's feed step is open (TICK-0096, TICK-0116)
 --------------------------------------------------------------------------------
 

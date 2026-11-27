@@ -11,8 +11,9 @@ local ADDON, ns = ...
 -- Lightning Shield (level 8) lasts 10 minutes with 3 charges, so it counts as
 -- missing only in a fight (TICK-0144). It is learned as a buff only after you
 -- cast it with the spell on your bars, so keepUp names it for every Shaman.
--- Water Shield (a Resto talent at 20) replaces it, one shield at a time; it
--- joins keepUp, with an auraMap pair, in TICK-0194.
+-- Water Shield (a Resto talent at 20) replaces it, one shield at a time.
+-- Either one counts as up, and either one ending in a fight gets the
+-- buff-end sound (TICK-0194).
 -- A totem's buff is never learned: it has its own spell ID, which you do not
 -- know, and the totem keeps it up.
 -- Not on Forever: Heroism, Bloodlust, Wind Shear, Cleanse Spirit, Earth
@@ -22,16 +23,24 @@ ns.RegisterClass("SHAMAN", {
 	dispel     = { Poison  = "Cure Poison",   -- level 16
 	               Disease = "Cure Disease" }, -- level 22
 	purge      = "Purge",                     -- levels 12 and 32
-	keepUp     = { "Lightning Shield" },
-	resource   = { aura = "Lightning Shield", max = 3 },
+	keepUp     = { "Lightning Shield", "Water Shield" },
+	-- The bar shows the first of these on you (TICK-0199): Maelstrom Weapon
+	-- (an Enhancement talent at 35, up to 5 stacks for an instant Lightning
+	-- Bolt), else the shield you wear. In a fight it keeps the pick it had
+	-- when the fight began. Maelstrom Weapon is preferred (TICK-0238): once
+	-- it is yours to get, it is the bar even at 0 stacks, so an Enhancement
+	-- Shaman sees the stacks in every fight, over either shield.
+	resource   = { { aura = "Maelstrom Weapon", max = 5, prefer = true },
+	               { aura = "Water Shield",     max = 3 },
+	               { aura = "Lightning Shield", max = 3 } },
 	-- Know any one of these, and each weapon in your hands needs one on it.
 	-- Each lasts 60 minutes on Forever. Levels 1, 10, 20, 30.
 	weaponBuff = { "Rockbiter Weapon", "Flametongue Weapon",
 		"Frostbrand Weapon", "Windfury Weapon" },
 	auraMap    = {},
 	powers     = { "MANA" },
-	-- A Lightning Shield used up in a fight is worth a sound (D-047,
-	-- TICK-0189). It lasts 10 minutes, so it drops in a fight only when its
+	-- A shield used up in a fight is worth a sound (D-047, TICK-0189,
+	-- TICK-0194). It lasts 10 minutes, so it drops in a fight only when its
 	-- 3 charges are used up.
 	keepUpSoundOn = true,
 	-- Cooldown ready alerts (TICK-0157): offered on the "Your class" page,
@@ -53,6 +62,27 @@ ns.RegisterClass("SHAMAN", {
 	-- Classic Era's; /hud debug aura proves it on Forever.
 	missingItem = {
 		{ key = "ankh", needs = { "Reincarnation" }, items = { 17030 }, on = true },
+		-- Every totem needs its element's tool in your bags (TICK-0215). A
+		-- player who skipped the totem quest, or sold or banked the tool,
+		-- sees why the totem will not cast. On. Classic Era item IDs.
+		{ key = "earthTotem", items = { 5175 }, on = true,
+		  needs = { "Stoneskin Totem", "Earthbind Totem", "Stoneclaw Totem",
+		            "Strength of Earth Totem", "Tremor Totem" } },
+		{ key = "fireTotem", items = { 5176 }, on = true,
+		  needs = { "Searing Totem", "Frost Resistance Totem", "Magma Totem",
+		            "Flametongue Totem" } },
+		{ key = "waterTotem", items = { 5177 }, on = true,
+		  needs = { "Healing Stream Totem", "Poison Cleansing Totem",
+		            "Mana Spring Totem", "Fire Resistance Totem",
+		            "Disease Cleansing Totem", "Mana Tide Totem" } },
+		{ key = "airTotem", items = { 5178 }, on = true,
+		  needs = { "Grounding Totem", "Nature Resistance Totem",
+		            "Windfury Totem", "Sentry Totem", "Windwall Totem",
+		            "Grace of Air Totem" } },
+		-- Water Walking uses Fish Oil, Water Breathing Shiny Fish Scales.
+		-- Off: out of a fight, and a short trip to a vendor (for DK veto).
+		{ key = "fishOil", needs = { "Water Walking" }, items = { 17058 } },
+		{ key = "fishScales", needs = { "Water Breathing" }, items = { 17057 } },
 	},
 	-- Rank 1 of each.
 	ids = {
@@ -61,6 +91,7 @@ ns.RegisterClass("SHAMAN", {
 		["Cure Disease"]        = 2870,
 		["Purge"]               = 370,
 		["Lightning Shield"]    = 324,
+		["Water Shield"]        = 408510, -- Resto talent, level 20
 		["Rockbiter Weapon"]    = 8017,
 		["Flametongue Weapon"]  = 8024,
 		["Frostbrand Weapon"]   = 8033,
@@ -70,8 +101,10 @@ ns.RegisterClass("SHAMAN", {
 		["Rage of the Farseer"] = 425336,
 		["Mana Tide Totem"]     = 16190,
 		["Reincarnation"]       = 20608, -- needs an Ankh (TICK-0182)
+		["Water Breathing"]     = 131,   -- needs Shiny Fish Scales
+		["Water Walking"]       = 546,   -- needs Fish Oil
 		-- Every totem needs its tool item in your bags: know any one of a
-		-- group, and you need that item. No missingItem row for them yet;
+		-- group, and you need that item (missingItem above, TICK-0215).
 		-- /hud debug ids checks these. Mana Tide Totem is above.
 		-- Earth Totem
 		["Stoneskin Totem"]          = 8071,  -- level 4

@@ -353,8 +353,9 @@ function ns.FeedSession(rest)
 	end
 	-- While the feed is off, the clock stopped when it went off (lastSeen).
 	say(Text("feed.session", Duration((s.lastSeen or time()) - s.start)))
-	ns.Detail(Text("feed.sessionMoney", F.Coins(s.coin or 0)))
-	ns.Detail(Text("feed.sessionLoot", F.Coins(s.value or 0)))
+	-- Size 0: chat's coins are as tall as chat's own font (TICK-0227).
+	ns.Detail(Text("feed.sessionMoney", F.Coins(s.coin or 0, 0)))
+	ns.Detail(Text("feed.sessionLoot", F.Coins(s.value or 0, 0)))
 	ns.Detail(Text("feed.sessionCounts", Number(s.xp or 0), s.kills or 0,
 		s.quests or 0, s.levels or 0))
 end

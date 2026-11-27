@@ -28,8 +28,9 @@ H.test("a saved table at the first number keeps every setting", function()
 		barNumbers = "percent", flair = 2, classes = { MAGE = { point = "BOTTOM", x = 4, y = 77 } } }
 	local _, db = Login(H.copy(saved))
 	for k, v in pairs(saved) do
-		if type(v) ~= "table" then H.eq(db[k], v, k) end
+		if type(v) ~= "table" and k ~= "schema" then H.eq(db[k], v, k) end
 	end
+	H.eq(db.schema, Last(w.ns), "schema number")
 	H.eq(db.classes.MAGE.x, 4, "the class position")
 	H.eq(db.classes.MAGE.point, "BOTTOM", "the class point")
 end)

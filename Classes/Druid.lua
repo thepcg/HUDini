@@ -6,8 +6,9 @@
 	Levels and IDs: talentsforever.com/data.json (Forever beta client
 	1.60.1.70755, 2026-11-18). Cap is 60.
 
-	No keepUp: Mark of the Wild (level 1, 30 min) and Thorns (level 6,
-	10 min) are learned by Auras.lua when you cast them. Omen of Clarity
+	No keepUp: Mark of the Wild (level 1, 1 hour) and Thorns (level 6,
+	10 min) are tracked buffs (trackBuff below), each with its own icon;
+	one keepUp list would show an icon only when both are gone. Omen of Clarity
 	(level 20) is a passive on Forever, not a buff. No purge: Soothe Animal
 	is not one.
 ----------------------------------------------------------------------------]]
@@ -37,8 +38,14 @@ ns.RegisterClass("DRUID", {
 	-- players forget is back, and the mana of every long fight. The rest
 	-- are short or for one role, so each starts off.
 	readyAlertOn = { "Rebirth", "Innervate" },
-	-- No keepUpSoundOn: Thorns is the one short buff, and a bear or cat must
-	-- leave the form to cast it again (TICK-0171, for DK veto).
+	-- The buff sound starts on (TICK-0214, DK's veto of "no buff sound"): it
+	-- plays when Mark of the Wild or Thorns ends in a fight. In Bear or Cat
+	-- Form you cannot recast them; that quiet is TICK-0197.
+	keepUpSoundOn = true,
+	-- Tracked from the day you know them, cast or not (TICK-0204). Thorns
+	-- counts out of a fight too until HUDini reads it on you once; then it
+	-- counts only in a fight (D-033).
+	trackBuff = { "Mark of the Wild", "Thorns" },
 	-- Reagents (TICK-0183): talentsforever tooltips name the item, the IDs
 	-- are Classic Era ones (Wowhead Classic), not yet proven on Forever.
 	missingItem = {
@@ -65,5 +72,6 @@ ns.RegisterClass("DRUID", {
 		["Frenzied Regeneration"] = 22842,
 		["Challenging Roar"]      = 5209,
 		["Dash"]                  = 1850,
+		["Thorns"]                = 467,
 	},
 })

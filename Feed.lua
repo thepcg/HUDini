@@ -169,17 +169,34 @@ end
 
 
 -- Blizzard's coin string gives its coins a fixed 14 px size, which sits
--- high in a bigger font. Size 0 makes each coin as tall as the text.
-local COIN = "|TInterface\\MoneyFrame\\UI-%sIcon:0:0:2:0|t"
+-- high in a bigger font. Size 0 (as tall as the text) is right on a line
+-- that fits, but on a line that wraps the game drew each coin a line too
+-- high, left its room empty, and the text ran under the line's icon
+-- (TICK-0227). So each coin gets the feed's font size, in pixels: as tall
+-- as the text, on one line or two. px gives another size: the big
+-- highlight's font (F.SizeCoins), or 0 for chat, where a line has one font
+-- and is not a feed line.
+local COIN = "|TInterface\\MoneyFrame\\UI-%sIcon:%d:%d:2:0|t"
 
-function F.Coins(n)
+local function Coin(kind, px)
+	px = px or math.floor(tonumber(HUDiniDB and HUDiniDB.feedFontSize) or 14)
+	return COIN:format(kind, px, px)
+end
+
+function F.Coins(n, px)
 	n = math.floor((tonumber(n) or 0) + 0.5)
 	local g, s, c = math.floor(n / 10000), math.floor(n / 100) % 100, n % 100
 	local parts = {}
-	if g > 0 then parts[#parts + 1] = Number(g) .. COIN:format("Gold") end
-	if s > 0 then parts[#parts + 1] = s .. COIN:format("Silver") end
-	if c > 0 or n == 0 then parts[#parts + 1] = c .. COIN:format("Copper") end
+	if g > 0 then parts[#parts + 1] = Number(g) .. Coin("Gold", px) end
+	if s > 0 then parts[#parts + 1] = s .. Coin("Silver", px) end
+	if c > 0 or n == 0 then parts[#parts + 1] = c .. Coin("Copper", px) end
 	return table.concat(parts, " ")
+end
+
+-- The coins of F.Coins in a text, at px pixels: a line's text shown in
+-- another font size (the big highlight).
+function F.SizeCoins(s, px)
+	return (s:gsub("(MoneyFrame\\UI%-%a+Icon):%d+:%d+", "%1:" .. px .. ":" .. px)) -- locale: skip a Lua pattern
 end
 
 function F.Gray(s) return "|cffa0a0a0" .. s .. "|r" end
@@ -352,10 +369,21 @@ end
 local lines = {}   -- lines[1] is the newest, at the bottom
 local pool = {}    -- spare { fs, tex } pairs
 
+-- The big highlight's font size: a little over one and a half lines.
+local function HighlightSize() return math.floor(size * 1.6 + 0.5) end
+
 local function SetFont(fs, px, flags)
 	if fs:SetFont(ns.BarFontPath(), px, flags) == false then
 		fs:SetFont(STANDARD_TEXT_FONT, px, flags)
 	end
+end
+
+-- The room between a line's text and its icon. The game draws a full line
+-- of a wrapped text a few pixels past the string's width (the outline and
+-- the shadow are not in its measure), so 4 px left no gap on such a line
+-- (TICK-0229). A thick outline takes 2 px more.
+local function IconGap()
+	return fontFlags == "THICKOUTLINE" and 10 or 8
 end
 
 -- Font, width and the icon's side, for one line's pair.
@@ -365,26 +393,30 @@ local function Style(L)
 	fs:SetShadowOffset(1, -1)
 	fs:SetShadowColor(0, 0, 0, 1)
 	fs:SetJustifyH(align)
-	fs:SetJustifyV("BOTTOM")
+	-- Set up like a chat line: centered, with no line cap. With BOTTOM and
+	-- a cap of 2 lines the game drew an inline coin about 0.7 of a line too
+	-- high, in its own font too, while chat's coins sat level (TICK-0227).
+	-- The string's height follows its text, so MIDDLE moves no text.
+	fs:SetJustifyV("MIDDLE")
 	fs:SetWordWrap(true)
-	if fs.SetMaxLines then fs:SetMaxLines(2) end
-	fs:SetWidth(HUDiniDB.feedWidth - iconSize - 4)
+	if fs.SetMaxLines then fs:SetMaxLines(0) end
+	fs:SetWidth(HUDiniDB.feedWidth - iconSize - IconGap())
 	tex:SetSize(iconSize, iconSize)
 	fs:ClearAllPoints()
 	tex:ClearAllPoints()
 	if align == "RIGHT" then
-		tex:SetPoint("TOPLEFT", fs, "TOPRIGHT", 4, 0)
+		tex:SetPoint("TOPLEFT", fs, "TOPRIGHT", IconGap(), 0)
 	else
-		tex:SetPoint("TOPRIGHT", fs, "TOPLEFT", -4, 0)
+		tex:SetPoint("TOPRIGHT", fs, "TOPLEFT", -IconGap(), 0)
 	end
 	L.anchored = false
 end
 
 local function Place(L)
 	if align == "RIGHT" then
-		L.fs:SetPoint("BOTTOMRIGHT", feed, "BOTTOMRIGHT", -(iconSize + 4), L.y)
+		L.fs:SetPoint("BOTTOMRIGHT", feed, "BOTTOMRIGHT", -(iconSize + IconGap()), L.y)
 	else
-		L.fs:SetPoint("BOTTOMLEFT", feed, "BOTTOMLEFT", iconSize + 4, L.y)
+		L.fs:SetPoint("BOTTOMLEFT", feed, "BOTTOMLEFT", iconSize + IconGap(), L.y)
 	end
 end
 
@@ -656,6 +688,9 @@ function NextHighlight()
 		text = body
 	end
 	if type(text) ~= "string" then return NextHighlight() end
+	-- The line's coins, at the highlight's own font size (TICK-0227).
+	local sized, s = pcall(F.SizeCoins, text, HighlightSize())
+	if sized then text = s end
 	if item.icon then text = ("|T%s:0|t %s"):format(item.icon, text) end
 	hl.text:SetText(text)
 	local c = item.color or F.COLOR.level
@@ -720,7 +755,7 @@ function ns.ApplyFeed()
 	backdrop:SetWidth(db.feedWidth + 16)
 
 	-- The highlight sits just over the box, on the same side.
-	SetFont(hl.text, math.floor(size * 1.6 + 0.5), "THICKOUTLINE")
+	SetFont(hl.text, HighlightSize(), "THICKOUTLINE")
 	hl.text:SetShadowOffset(2, -2)
 	hl.text:SetShadowColor(0, 0, 0, 1)
 	hl.text:SetJustifyH(align)

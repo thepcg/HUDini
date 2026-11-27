@@ -7,9 +7,9 @@
 local CASES = {
 	{ "MAGE",    "Mage",    "Frost Armor",         "Ice Armor" },
 	{ "MAGE",    "Mage",    "Mage Armor",          "Frost Armor" },
-	{ "MAGE",    "Mage",    "Dampen Magic",        "Amplify Magic" },
 	{ "WARLOCK", "Warlock", "Demon Armor",         "Demon Skin" },
-	-- The Detect Invisibility group is never learned at all (TICK-0064):
+	-- The Detect Invisibility group (TICK-0064) and the Mage's Amplify Magic
+	-- and Dampen Magic (TICK-0206) are never learned at all:
 	-- tools/tests/test_one_job.lua.
 }
 

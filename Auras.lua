@@ -677,9 +677,15 @@ end
 -- on a bar the grid does not read (Bar 4 and up in "one row per action bar").
 --
 -- ns.buffMissing is true while a learned buff spell you know has none of its
--- buffs on you, on the grid or not. Core.lua shows the HUD for it, and
--- ns.missingBuffID (the first one, grid order, then by name) is the icon
--- Alerts.lua puts by your health bar.
+-- buffs on you, on the grid or not. Core.lua shows the HUD for it.
+-- ns.missingBuffIDs lists each one off (grid order, then by name), and
+-- Alerts.lua puts one red icon by your health bar for each, side by side
+-- (TICK-0252). A buff group where one buff counts for all (the Mage armors)
+-- gets one icon, as it gets one watch (WatchCovers, TICK-0222). Out of a
+-- fight a weapon buff a bare weapon needs (TICK-0198) is
+-- ns.missingWeaponID, an icon of its own after them; it does not set
+-- ns.buffMissing. ns.missingBuffID is the first of the list, else the
+-- weapon buff.
 --
 -- The saved value is the buff's full length in seconds, as the aura's
 -- duration last read it (0: no end). A buff under 30 minutes (Lightning
@@ -756,15 +762,19 @@ local STATES = ns.NameSet({
 
 -- Long buffs for one job, by name: enUS and the client's own (TICK-0024).
 -- Righteous Fury
--- is on the list for the paladin who does not tank; a tank loses the
--- reminder for it, as HUDini cannot tell the two apart. A priest casts Fear
+-- is on the list for the paladin who does not tank: it is never learned. A
+-- tank gets its icon from the class file's tankBuff instead, with Seal of
+-- Fury on as the tell (TICK-0208, ns.TankBuffMissing). A priest casts Fear
 -- Ward or Shadow Protection for one pull; both of the Shadow Protection pair
--- (Classes.lua) are here, so neither is learned.
+-- (Classes.lua) are here, so neither is learned. A mage casts Amplify Magic
+-- or Dampen Magic on a party member for one job (TICK-0206); a mage who
+-- keeps one up on purpose loses the reminder for it.
 local ONE_JOB = ns.NameSet({
 	"Unending Breath", "Water Walking", "Water Breathing",
 	"Detect Lesser Invisibility", "Detect Invisibility",
 	"Detect Greater Invisibility", "Righteous Fury",
 	"Fear Ward", "Shadow Protection", "Prayer of Shadow Protection",
+	"Amplify Magic", "Dampen Magic",
 })
 -- locale: end
 
@@ -845,7 +855,11 @@ local function ReadFormName()
 	if type(index) ~= "number" or index < 1 then return nil end
 	local okInfo, _, _, _, spellID = pcall(GetShapeshiftFormInfo, index)
 	spellID = okInfo and Plain(spellID)
-	return spellID and Plain(C_Spell.GetSpellName(spellID)) or nil
+	if not spellID then return nil end
+	-- In a pcall: a pass reads the form (inPass); a throw here must not
+	-- stop the pass before it ends (TICK-0197).
+	local okName, name = pcall(C_Spell.GetSpellName, spellID)
+	return okName and Plain(name) or nil
 end
 
 -- Read once for each ns.UpdateBuffMissing: it checks every learned buff.
@@ -961,7 +975,10 @@ end
 -- be secret; a nil never is, and type() reads either. So nil means off,
 -- anything else means on. Only from a viewer that is visible: a hidden one,
 -- or one whose parent is hidden (Alt-Z), stops its UNIT_AURA
--- (CooldownViewerMixin:OnHide) and its frames go stale.
+-- (CooldownViewerMixin:OnHide) and its frames go stale. Its Visibility
+-- "In Combat" works: the game shows it while UnitAffectingCombat, and its
+-- OnShow listens again and reads all its items (CooldownViewer.lua
+-- GetShouldBeShown, OnShow; TICK-0253).
 --
 -- The viewer counts only the auras you cast yourself ("HELPFUL|PLAYER",
 -- sourceUnit "player", CooldownViewerItemData.lua). HUDini goes by name,
@@ -1082,6 +1099,9 @@ local function BuffState(source, names, learnID)
 	for _, name in ipairs(names) do
 		local id, data = FindAura(name)
 		if id then
+			-- Its ID, for the watch: off the grid, or a group's other name
+			-- (TICK-0205).
+			LearnID(name, data)
 			if not last and learnID then Learn(source, data, learnID) end
 			local ends = EndOf(data)
 			if not last or (lastEnds and (not ends or ends > lastEnds)) then
@@ -1146,6 +1166,156 @@ function ns.KeepUpState(list)
 	return BuffState(KEEP_UP, KeepUpNames(list))
 end
 
+-- The class file's formQuiet and formQuietSound (TICK-0197). In a formQuiet
+-- form (a Druid's Travel Form) you cannot cast a buff, so no buff is
+-- missing: no buff-missing icon, red edge or sound. In a formQuietSound form
+-- (Bear Form, Cat Form) the icon stays, but a fight plays no buff-missing
+-- sound: you would leave the form to cast it.
+local function InFormOf(key)
+	-- The list first: a class with none never reads your form for it.
+	local names = KeepUpNames(ns.ClassDefault and ns.ClassDefault(key))
+	if #names == 0 then return false end
+	local form = FormName()
+	if not form then return false end
+	for _, name in ipairs(names) do
+		if name == form then return true end
+	end
+	return false
+end
+
+local function FormQuiet()
+	return InFormOf("formQuiet")
+end
+ns.FormQuiet = FormQuiet
+
+local function FormSoundQuiet()
+	return InFormOf("formQuiet") or InFormOf("formQuietSound")
+end
+ns.FormSoundQuiet = FormSoundQuiet
+
+-- The class file's pet.buffs (TICK-0192): a buff only a live pet lets you
+-- keep, as the Warlock's Soul Link. With no live pet out it is never
+-- missing: no icon, red edge, watch or sound. A pet the game will not
+-- answer for counts as out, so the buff counts as it did before.
+local function PetBuffs()
+	local p = ns.ClassDefault and ns.ClassDefault("pet")
+	local list = type(p) == "table" and p.buffs
+	return type(list) == "table" and list or nil
+end
+
+local function PetOut()
+	local ok, out = pcall(UnitExists, "pet")
+	if not ok or ns.IsSecret(out) then return true end
+	if not out then return false end
+	local okDead, dead = pcall(UnitIsDead, "pet")
+	if not okDead or ns.IsSecret(dead) then return true end
+	return not dead
+end
+
+-- True when source is a pet buff and no live pet is out.
+local function NoPetFor(source)
+	local list = PetBuffs()
+	if not list then return false end
+	for _, name in ipairs(list) do
+		if name == source then return not PetOut() end
+	end
+	return false
+end
+
+-- The tank buff (TICK-0208): the class file's tankBuff = { buff = "Righteous
+-- Fury", with = { "Seal of Fury" } }. HUDini cannot read your role, so a
+-- with buff on is the tell that you tank. In a fight its icon shows when
+-- the buff is surely off while one of with is on, or was last seen on, as
+-- for the keep-up list (TICK-0130, TICK-0135). The buff and the with list
+-- each keep their own memory. The buff stays on ONE_JOB: it is never
+-- learned, so a paladin who does not tank gets no icon for it.
+-- Limit: a seal you change to in a fight is not read. The with seal you
+-- had counts as on to its own end, so its icon can stay that long after you
+-- leave Seal of Fury. A with buff cast before HUDini read how long it lasts
+-- (the first Seal of Fury after a login or /reload, cast in a fight) ends
+-- after TANK_WITH_LASTS: a seal lasts 30 seconds. If it lasts longer, the
+-- icon goes early: a missed icon, never a false one.
+local TANK_BUFF, TANK_WITH = "tankBuff", "tankWith"
+local TANK_WITH_LASTS = 30
+
+-- The class file's buff name and with list, by the client's names, or nil.
+local function TankBuff()
+	local tank = ns.ClassDefault("tankBuff")
+	if type(tank) ~= "table" or type(tank.buff) ~= "string" or tank.buff == "" then return nil end
+	return tank.buff, KeepUpNames(tank.with)
+end
+
+-- The tank buff's spell ID when you know it, else nil. The "Your class"
+-- row shows only then.
+function ns.TankBuffSpell()
+	local buff = TankBuff()
+	local id = buff and ns.SpellID(buff)
+	if id and IsPlayerSpell and IsPlayerSpell(id) then return id end
+	return nil
+end
+
+-- The tank buff's spell ID when its icon is due (the buff surely off, a
+-- with buff on), else nil. Asked out of a fight too, so HUDini has seen
+-- both before the fight hides them.
+function ns.TankBuffMissing()
+	if not (C_UnitAuras and C_UnitAuras.GetAuraDataBySpellName) then return nil end
+	local id = ns.TankBuffSpell()
+	if not id then return nil end
+	local buff, with = TankBuff()
+	if #with == 0 then return nil end
+	local off = BuffState(TANK_BUFF, { buff }) == false
+	local tanking = BuffState(TANK_WITH, with) == true
+	if off and tanking then return id end
+	return nil
+end
+
+-- A buff not to have on in a fight (TICK-0196): the class file's
+-- notInFight names, a Hunter's Aspect of the Cheetah and of the Pack (each
+-- dazes you when you are hit). In a fight, while one of them is on, a red
+-- icon of your last fight aspect (a keep-up name not in the list) shows
+-- left of your health bar. HUDini reads no aura in a fight for it: a watch
+-- the other way round does the work (below, "The game's own watch").
+local NOT_IN_FIGHT = "notInFight"
+ns.NOT_IN_FIGHT_KEY = NOT_IN_FIGHT
+
+-- The fight buff last seen on you out of a fight, or cast: its name.
+local lastFightBuff
+
+local function NotInFightNames()
+	return KeepUpNames(ns.ClassDefault("notInFight"))
+end
+
+-- The class file's keep-up names not in notInFight: the buffs for a fight.
+local function FightNames(notIn)
+	local skip, out = {}, {}
+	for _, name in ipairs(notIn) do skip[name] = true end
+	for _, name in ipairs(KeepUpNames(ns.ClassDefault("keepUp"))) do
+		if not skip[name] then out[#out + 1] = name end
+	end
+	return out
+end
+
+local function KnownID(name)
+	local id = ns.SpellID(name)
+	if id and IsPlayerSpell and IsPlayerSpell(id) then return id end
+	return nil
+end
+
+-- The icon: the last fight buff when you know it, else the first you know.
+-- Out of a fight only: a fight buff on you now is the last one.
+local function FightIconID(fight)
+	for _, name in ipairs(fight) do
+		if FindAura(name) then lastFightBuff = name end
+	end
+	for _, name in ipairs(fight) do
+		if name == lastFightBuff and KnownID(name) then return KnownID(name) end
+	end
+	for _, name in ipairs(fight) do
+		if KnownID(name) then return KnownID(name) end
+	end
+	return nil
+end
+
 --------------------------------------------------------------------------------
 -- The game's own watch on each buff to keep up (TICK-0168, second pass)
 --
@@ -1177,14 +1347,28 @@ end
 -- names: one of them ending does not mean all are off (seals and forms
 -- change by design). Each spell ID is asked for once, so a shared ID sounds
 -- once. At a fight's start and end HUDini makes no sound calls at all.
+-- The game's sound cannot carry the buff missing repeat either (TICK-0253):
+-- it plays once when the aura goes (the triggers are Added,
+-- ApplicationsIncreased and Removed), it stops after five seconds, and
+-- the game refuses a new one in a fight, so none can be armed again then.
+--
+-- No Lua learns of the watch's change (TICK-0253): the game sets the
+-- container's size as a secret (OnLayoutComplete, secretwrap), forbids
+-- addon layout scripts on it (AddAuraGroup: UntrustedLayoutScriptExecution,
+-- so no OnSizeChanged on the container or on a frame anchored to it), and
+-- closes its aura frames while your auras are secret (AccessRestrictionFlags,
+-- Blizzard_AuraContainerShared.lua). So the icon and the game's one sound
+-- come with no HUDini code, and the buff missing repeat (Alerts.lua) cannot
+-- start from a watch.
 --
 -- The Cooldown Manager path above stays: where the player tracks the buff
 -- there, HUDini's own state knows too, so the HUD icon glows (D-035), the
 -- keep-up icon is not doubled and /hud why can tell. It is also all there
 -- is on a client with no containers or no aura sounds.
 --
--- A watch needs a read ID for each of its buff names (one sight of the buff
--- out of a fight, as Covers): else the buff on could not hide the icon.
+-- A watch needs a read ID for at least one of its buff names (one sight of
+-- the buff out of a fight, as Covers): that proves the buff's ID. Its other
+-- names add the client's ID for the name, the rank you know now (TICK-0205).
 -- Watches are made, placed and given their IDs out of a fight only. Each has
 -- a spot of its own left of the bar, in Alerts.lua's order: the keep-up
 -- list first, then your own buffs (the grid, then by name). In a fight
@@ -1203,6 +1387,9 @@ local WATCH_DIM    = 0.65    -- the keep-up icon's dim (Alerts.lua KeepUpIcon)
 local watches = {} -- in order; false once this client proved to have no container
 local watchFight = false -- a fight is on: the icons may show
 local watchMax = WATCH_MAX -- lower once a container could not be made: no new try
+-- A learned buff with no watch of its own because another's watch covers
+-- it: its key -> the owner's key (TICK-0222). Set with the watches.
+local coveredBy = {}
 local soundsBroken = false -- the game took a sound and gave no ID back: never again
 -- Each time the game gave no ID back. The return may be nil (the game's
 -- documentation says so), maybe as a "no": the first waits for the next
@@ -1221,34 +1408,109 @@ local soundLast = "none yet" -- locale: skip a debug report
 local soundTimer, soundTimerAt = nil, nil
 local SyncSounds
 
--- The read IDs of every name, as a set and a key; nil when a name has none.
-local function WatchIDs(names)
+-- The client's ID for a name, kept once found, so a watch's IDs never
+-- change because the game did not answer once. A new rank changes the
+-- answer: SPELLS_CHANGED clears it.
+local nameIDs = {}
+local function NameID(name)
+	if nameIDs[name] == nil then
+		local ok, id = pcall(ns.SpellID, name)
+		if ok and type(id) == "number" then nameIDs[name] = id end
+	end
+	return nameIDs[name]
+end
+local function ClearNameIDs() nameIDs = {} end
+
+-- The formQuiet forms' spell IDs, as a set and a key, or nil: the IDs read
+-- from your buffs, and the client's ID for each name. A watch takes them
+-- with its own IDs (WantedWatches), so in a fight one of these forms on you
+-- cuts its red icon away as its buff would: no Lua runs then. Not its
+-- sound: that stays on the buff's own IDs.
+local function QuietIDs()
 	local known = KnownIDs()
 	local set, list = {}, {}
-	for _, name in ipairs(names) do
-		local any = false
-		for id in pairs(known[name] or {}) do
-			any = true
-			if not set[id] then
-				set[id] = true
-				list[#list + 1] = id
-			end
+	local function Add(id)
+		if type(id) == "number" and not set[id] then
+			set[id] = true
+			list[#list + 1] = id
 		end
-		if not any then return nil end
+	end
+	for _, name in ipairs(KeepUpNames(ns.ClassDefault and ns.ClassDefault("formQuiet"))) do
+		for id in pairs(known[name] or {}) do Add(id) end
+		-- NameID: one nil answer (a loading screen) must not drop the form
+		-- and re-arm the watch with no include before a pull.
+		Add(NameID(name))
 	end
 	if #list == 0 then return nil end
 	table.sort(list)
 	return set, table.concat(list, " ")
 end
 
+-- The IDs of a group's names, as a set and a key. At least one name must
+-- have an ID read from your buffs: that proves the buff's ID. A name with
+-- none adds the client's ID for its name (Ice Armor you never cast), or is
+-- left out when the client gives no ID for the name
+-- (TICK-0205). nil when no name has a read ID.
+local function WatchIDs(names)
+	local known = KnownIDs()
+	local set, list, read = {}, {}, false
+	local function Add(id)
+		if not set[id] then
+			set[id] = true
+			list[#list + 1] = id
+		end
+	end
+	for _, name in ipairs(names) do
+		local any = false
+		for id in pairs(known[name] or {}) do
+			any, read = true, true
+			Add(id)
+		end
+		if not any then
+			local id = NameID(name)
+			if id then Add(id) end
+		end
+	end
+	if not read then return nil end
+	table.sort(list)
+	return set, table.concat(list, " ")
+end
+
 -- The buffs to watch now, in order: the alerts' own lists and settings.
+-- A buff group where one buff counts for all (the Mage armors, a Paladin's
+-- auras) gets one watch, not one for each learned member: each would be on
+-- the same IDs and show its own red icon in a fight (TICK-0222). The
+-- member on your bars owns it, else the first by name, as for the alert's
+-- own icon out of a fight (ns.UpdateBuffMissing).
+-- A buff B is covered by a watch formed before it only when every name of
+-- that watch also counts for B: then B off means each of them is off, so
+-- the watch shows. A buff that only shares a name (A counts B, B does not
+-- count A) keeps a watch of its own. A buff with no read ID forms no watch,
+-- so it covers nothing. The combat buff list comes last, and stops before
+-- this when one of its names is a learned buff, so it neither covers nor is
+-- covered here.
+local function WatchCovers(ownerNames, names)
+	local mine = {}
+	for _, name in ipairs(names) do mine[name] = true end
+	for _, name in ipairs(ownerNames) do
+		if not mine[name] then return false end
+	end
+	return true
+end
+
 local function WantedWatches()
 	local db = HUDiniDB
-	local want, taken = {}, {}
-	if not (db and db.showHealth) then return want end
+	local want, taken, covered = {}, {}, {}
+	if not (db and db.showHealth) then return want, covered end
 	local function Add(key, names, iconID, dim)
 		if taken[key] then return end
 		taken[key] = true
+		for _, wnt in ipairs(want) do
+			if WatchCovers(wnt.names, names) then
+				covered[key] = wnt.key
+				return
+			end
+		end
 		local set, idKey = WatchIDs(names)
 		if set then
 			want[#want + 1] = { key = key, names = names, set = set, idKey = idKey,
@@ -1260,7 +1522,10 @@ local function WantedWatches()
 		DropNotToKeep(learned)
 		for _, e in ipairs(HUDini.spells) do
 			local source = e.spellID and not e.itemID and Plain(C_Spell.GetSpellName(e.spellID))
-			if type(source) == "string" and learned[source] and not IsState(source, e.spellID) then
+			-- TICK-0192: no watch for a pet buff with no live pet out. A
+			-- watch changes only out of a fight: one armed before it stays.
+			if type(source) == "string" and learned[source] and not IsState(source, e.spellID)
+					and not NoPetFor(source) then
 				Add(source, AuraNamesFor(source), e.spellID)
 			end
 		end
@@ -1271,7 +1536,7 @@ local function WantedWatches()
 		table.sort(rest)
 		for _, source in ipairs(rest) do
 			local id = ns.SpellID(source)
-			if id and IsPlayerSpell and IsPlayerSpell(id) then
+			if id and IsPlayerSpell and IsPlayerSpell(id) and not NoPetFor(source) then
 				Add(source, AuraNamesFor(source), id)
 			end
 		end
@@ -1280,29 +1545,85 @@ local function WantedWatches()
 		local names = KeepUpNames(ns.ClassValue("keepUp"))
 		local iconID
 		for _, name in ipairs(names) do
-			-- A keep-up buff that is a learned buff has its own watch
-			-- (Alerts.lua OwnBuffCovers): one icon is enough.
-			if taken[name] then return want end
+			-- A keep-up buff that is a learned buff has its own watch, or
+			-- the watch that covers it (Alerts.lua OwnBuffCovers): one icon
+			-- is enough.
+			if taken[name] then
+				iconID = nil
+				break
+			end
 			local id = ns.SpellID(name)
 			if not iconID and id and IsPlayerSpell and IsPlayerSpell(id) then iconID = id end
 		end
 		if iconID then Add(KEEP_UP, names, iconID, true) end
+		-- TICK-0196: the other way round, so not through Add: no cover.
+		-- Your combat buff set to None: no keep-up role, so none of this.
+		local notIn = #names > 0 and NotInFightNames() or {}
+		local fightID = #notIn > 0 and FightIconID(FightNames(notIn))
+		local set, idKey = nil, nil
+		if fightID then set, idKey = WatchIDs(notIn) end
+		if set then
+			-- The keep-up watch's spot when each name is one of its names:
+			-- then the two icons never show at once.
+			local keep
+			for _, wnt in ipairs(want) do
+				if wnt.key == KEEP_UP then keep = wnt end
+			end
+			local share = keep ~= nil and WatchCovers(notIn, keep.names)
+			-- A keep-up icon whose list leaves them out shows anyway while one
+			-- is on (a Hunter has one aspect on at a time): a second icon
+			-- would tell nothing more.
+			if keep == nil or share then
+				want[#want + 1] = { key = NOT_IN_FIGHT, names = notIn, set = set, idKey = idKey,
+					iconID = fightID, dim = true, inverse = true, share = share }
+			end
+		end
 	end
-	return want
+	-- TICK-0197: a formQuiet form on you counts as the buff for the icon
+	-- (show), never for the sound (set). Not an inverse watch: it shows
+	-- while its buff is on.
+	local quiet, quietKey = QuietIDs()
+	if quiet then
+		for _, wnt in ipairs(want) do
+			if not wnt.inverse then
+				local show = {}
+				for id in pairs(wnt.set) do show[id] = true end
+				for id in pairs(quiet) do show[id] = true end
+				wnt.show, wnt.idKey = show, wnt.idKey .. " / " .. quietKey
+			end
+		end
+	end
+	return want, covered
 end
 
 -- Alerts.lua's order (LEFT_ORDER): the keep-up list first, then your own
 -- buffs; no more than this client can make.
 local function WatchOrder()
-	local found, want = WantedWatches(), {}
+	local found, covered = WantedWatches()
+	local want = {}
 	for _, wnt in ipairs(found) do
-		if wnt.key == KEEP_UP then want[1] = wnt end
+		if wnt.key == KEEP_UP then want[#want + 1] = wnt end
 	end
 	for _, wnt in ipairs(found) do
-		if wnt.key ~= KEEP_UP and #want < watchMax then want[#want + 1] = wnt end
+		if wnt.key == NOT_IN_FIGHT then want[#want + 1] = wnt end
+	end
+	for _, wnt in ipairs(found) do
+		if wnt.key ~= KEEP_UP and wnt.key ~= NOT_IN_FIGHT and #want < watchMax then want[#want + 1] = wnt end
 	end
 	while #want > watchMax do table.remove(want) end
-	return want
+	-- Each watch's spot left of the bar (1 is by the bar). The not-in-fight
+	-- watch takes the keep-up watch's spot when it shares it.
+	local spot, keepSpot = 0, nil
+	for _, wnt in ipairs(want) do
+		if wnt.share and keepSpot then
+			wnt.spot = keepSpot
+		else
+			spot = spot + 1
+			wnt.spot = spot
+		end
+		if wnt.key == KEEP_UP then keepSpot = wnt.spot end
+	end
+	return want, covered
 end
 
 -- The red icon, as Alerts.lua's: a red square, the spell's picture 1 pixel
@@ -1382,8 +1703,10 @@ local function WatchSpot()
 end
 
 -- Put a watch on the spot, h high: the container's element one icon and
--- two margins wide, the clip off its right edge (above).
-local function PlaceWatch(w, x, y, h, level)
+-- two margins wide, the clip off its right edge (above). Inverse (TICK-0196):
+-- the clip's right edge on the container's, so it covers the spot while the
+-- buff is on (the container wide) and lies left of it while it is off.
+local function PlaceWatch(w, x, y, h, level, inverse)
 	local m = WATCH_MARGIN
 	if not Try(w.box, "SetAuraGroupLayout", WATCH_GROUP, { elementWidth = h + 1 + 2 * m, elementHeight = h }) then
 		return false
@@ -1392,7 +1715,11 @@ local function PlaceWatch(w, x, y, h, level)
 		w.box:ClearAllPoints()
 		w.box:SetPoint("TOPLEFT", HUDini, "TOPLEFT", x, y)
 		w.clip:ClearAllPoints()
-		w.clip:SetPoint("TOPLEFT", w.box, "TOPRIGHT", -1 - m, m)
+		if inverse then
+			w.clip:SetPoint("TOPRIGHT", w.box, "TOPRIGHT", -1 - m, m)
+		else
+			w.clip:SetPoint("TOPLEFT", w.box, "TOPRIGHT", -1 - m, m)
+		end
 		w.clip:SetSize(h + 2 * m, h + 2 * m)
 		w.clip:SetFrameLevel(level)
 		w.art:ClearAllPoints()
@@ -1460,8 +1787,27 @@ local function TimeSounds()
 	end
 end
 
--- Out of a fight: the game sounds for each armed watch of one name whose
--- buff does not end soon, and for nothing else (above). A sound that will
+-- A watch of more than one name (the keep-up list, a buff group) gets the
+-- game's sound only while at most one of its buffs is on (TICK-0194). The
+-- game sounds as any one of them leaves you, and with two on (Ice Barrier
+-- and Mana Shield), one leaving does not mean the list is off. Out of a
+-- fight only, while your auras read: a buff the game will not say counts as
+-- on. Limit: a buff that replaces another of the list (Water Shield over
+-- Lightning Shield, one armor for another) sounds once, as the old one
+-- leaves; and a second buff cast in a fight is not read, so the first
+-- one's end sounds.
+local function AtMostOneOn(w)
+	if #w.names < 2 then return true end
+	local on = 0
+	for _, name in ipairs(w.names) do
+		if FindAura(name) ~= false then on = on + 1 end
+	end
+	return on <= 1
+end
+
+-- Out of a fight: the game sounds for each armed watch whose buff does not
+-- end soon and that has at most one of its buffs on, and for nothing else
+-- (above). A sound that will
 -- not go stays counted and is tried again at the next sync; its ID is not
 -- asked for again meanwhile (one sound, not two). In a fight: no calls,
 -- only what HUDini counts on.
@@ -1472,9 +1818,12 @@ SyncSounds = function()
 	if not SoundsLocked() and api and api.AddAuraSound and api.RemoveAuraSound and trigger then
 		local file = ns.MissingSoundFile and ns.MissingSoundFile()
 		local want = {}
-		if file and not soundsBroken then
+		-- TICK-0197: in a form whose buffs make no sound, the game holds
+		-- none, so a fight started in it plays none. A form changed in a
+		-- fight is not seen here (no sound calls then).
+		if file and not soundsBroken and not FormSoundQuiet() then
 			for _, w in ipairs(watches) do
-				if w.armed and #w.names == 1 and not EndsSoon(w.key) then
+				if w.armed and not w.inverse and not EndsSoon(w.key) and AtMostOneOn(w) then
 					for id in pairs(w.set) do want[id] = true end
 				end
 			end
@@ -1494,10 +1843,14 @@ SyncSounds = function()
 		end
 		for id in pairs(want) do
 			if not have[id] and soundNo[id] ~= file and not soundsBroken then
+				-- A game sound is a file ID; a HUDini voice sound is a path,
+				-- which the game takes as soundFileName (TICK-0230).
+				local named = type(file) == "string"
 				local ok, res = pcall(api.AddAuraSound, trigger, {
 					unitToken = "player", -- locale: skip a unit
 					spellID = id,
-					soundFileID = file,
+					soundFileID = not named and file or nil,
+					soundFileName = named and file or nil,
 					outputChannel = "Master", -- locale: skip a channel
 				})
 				local soundID = ok and Plain(res) or nil
@@ -1505,6 +1858,12 @@ SyncSounds = function()
 					soundReg[soundID] = { id = id, file = file }
 					have[id] = true
 					soundLast = ("asked %d: sound %d"):format(id, soundID) -- locale: skip a debug report
+				elseif ok and named then
+					-- A path the game will not take (a client without the
+					-- file, before a restart): a refusal of this file only,
+					-- so the game's own sounds still work. HUDini plays it.
+					soundNo[id] = file
+					soundLast = ("asked %d: no ID back for a file name"):format(id) -- locale: skip a debug report
 				elseif ok then
 					-- No ID back: maybe a "no", maybe a sound HUDini could
 					-- never take back. Once: as a refusal. Twice: no more.
@@ -1521,12 +1880,18 @@ SyncSounds = function()
 	end
 	local have = {}
 	for _, r in pairs(soundReg) do have[r.id] = true end
+	-- The game's to sound only with every ID of the watch held: another
+	-- watch's sound for one of them (Mana Shield's own, with the pair
+	-- Lightning Shield or Mana Shield) does not sound as the other ends.
 	soundFor = {}
 	for _, w in ipairs(watches) do
-		if w.armed and #w.names == 1 then
+		-- Not an inverse watch: its buff ending is good news.
+		if w.armed and not w.inverse and next(w.set) then
+			local all = true
 			for id in pairs(w.set) do
-				if have[id] then soundFor[w.key] = true end
+				if not have[id] then all = false end
 			end
+			soundFor[w.key] = all or nil
 		end
 	end
 	TimeSounds()
@@ -1545,7 +1910,9 @@ function ns.BuffWatchReport(out)
 		tostring(watchFight), tostring(soundsHeld), tostring(SoundsLocked()), tostring(soundsBroken)))
 	out("    Sound file " .. tostring(file))
 	for i, w in ipairs(watches) do
-		local key = w.key == KEEP_UP and "combat buff list" or tostring(w.key)
+		local key = w.key == KEEP_UP and "combat buff list"
+			or w.key == NOT_IN_FIGHT and "not in a fight (shows while on)"
+			or tostring(w.key)
 		out(("    Watch %d: %s, IDs %s, armed %s, game sound %s, on at the fight start %s"):format(
 			i, key, IDLine(w.set), tostring(w.armed), tostring(soundFor[w.key] == true), tostring(soundOn[w.key])))
 	end
@@ -1566,11 +1933,13 @@ function ns.GameSounds(key)
 end
 
 -- In a fight: true when an armed watch shows this buff's red icon (a source
--- name, or ns.KEEP_UP_KEY), so Alerts.lua shows none of its own.
+-- name, or ns.KEEP_UP_KEY), so Alerts.lua shows none of its own. A buff
+-- another's watch covers counts when that watch is armed (TICK-0222).
 function ns.BuffWatched(key)
 	if not watchFight or watches == false then return false end
+	local owner = coveredBy[key]
 	for _, w in ipairs(watches) do
-		if w.armed and w.key == key then return true end
+		if w.armed and (w.key == key or (owner ~= nil and w.key == owner)) then return true end
 	end
 	return false
 end
@@ -1580,8 +1949,8 @@ end
 function ns.BuffWatchSpots()
 	if not watchFight or watches == false then return 0 end
 	local n = 0
-	for i, w in ipairs(watches) do
-		if w.armed then n = i end
+	for _, w in ipairs(watches) do
+		if w.armed and w.spot and w.spot > n then n = w.spot end
 	end
 	return n
 end
@@ -1589,7 +1958,8 @@ end
 -- Make, fill and place the watches, out of a fight only.
 SyncWatches = function()
 	if watches == false or InCombatLockdown() then return end
-	local want = WatchOrder()
+	local want, covered = WatchOrder()
+	coveredBy = covered
 	local x, y, h, bar = WatchSpot()
 	if not x then want = {} end
 	for i, wnt in ipairs(want) do
@@ -1608,9 +1978,10 @@ SyncWatches = function()
 			watches[i] = w
 		end
 		w.key, w.names, w.set = wnt.key, wnt.names, wnt.set
+		w.spot, w.inverse = wnt.spot, wnt.inverse == true
 		if w.idKey ~= wnt.idKey then
 			w.idKey = Try(w.box, "SetAuraGroupCandidateFilters", WATCH_GROUP,
-				{ includeSpellIDs = wnt.set }) and wnt.idKey or nil
+				{ includeSpellIDs = wnt.show or wnt.set }) and wnt.idKey or nil
 			-- New IDs on a container that is on: off and on again, so the
 			-- game reads your auras with them, not only the next change.
 			if w.armed then
@@ -1618,11 +1989,11 @@ SyncWatches = function()
 				w.armed = false
 			end
 		end
-		local place = table.concat({ x, y, h, i }, " ")
+		local place = table.concat({ x, y, h, wnt.spot, tostring(w.inverse) }, " ")
 		if w.place ~= place then
-			local sx = x - (i - 1) * (h + WATCH_GAP)
+			local sx = x - (wnt.spot - 1) * (h + WATCH_GAP)
 			-- Above the alerts' own icons.
-			w.place = PlaceWatch(w, sx, y, h, bar:GetFrameLevel() + 4) and place or nil
+			w.place = PlaceWatch(w, sx, y, h, bar:GetFrameLevel() + 4, w.inverse) and place or nil
 		end
 		pcall(function()
 			w.tex:SetTexture(C_Spell.GetSpellTexture(wnt.iconID) or 134400)
@@ -1674,11 +2045,49 @@ local function WatchFight(on)
 	if ns.UpdateOwnBuffIcon then pcall(ns.UpdateOwnBuffIcon) end
 end
 
+-- The class file's trackBuff names (TICK-0204, D-047): each counts as a
+-- tracked buff from the start, as if HUDini had seen it on you, so a buff
+-- you never cast still gets its icon. Each name is put in once, when you
+-- know its spell: buffSeeded remembers it, so a buff you clear (/hud buffs
+-- forget, Clear learned buffs) stays cleared until HUDini sees it on you
+-- again, as any learned buff. A spell you learn later goes in then.
+-- The saved value is true (no length known): it counts in and out of a
+-- fight until HUDini reads the buff on you and saves its length; then
+-- D-033 applies (under 30 minutes: only in a fight).
+local function SeedClassBuffs()
+	local list = ns.ClassDefault and ns.ClassDefault("trackBuff")
+	if type(list) ~= "table" then return end
+	local mine = ns.ClassDB()
+	for _, name in ipairs(list) do
+		local id = type(name) == "string" and ns.SpellID(name)
+		if id and not (mine.buffSeeded and mine.buffSeeded[name])
+				and IsPlayerSpell and IsPlayerSpell(id)
+				and not (ONE_JOB()[name] or IsTracking(name) or IsState(name, id)) then
+			mine.buffSeeded = mine.buffSeeded or {}
+			mine.buffSeeded[name] = true
+			mine.buffSpells = mine.buffSpells or {}
+			if mine.buffSpells[name] == nil then mine.buffSpells[name] = true end
+		end
+	end
+end
+
 function ns.UpdateBuffMissing()
 	passTracking, inPass = nil, true
 	passForm, passFormRead = nil, false
 	LearnFromYourBuffs()
-	local missingID
+	if HUDiniDB then pcall(SeedClassBuffs) end
+	-- Each buff off, with the names that count for it: a buff whose names
+	-- cover a later one's (WatchCovers) stands for it too.
+	local missing, missingNames = {}, {}
+	-- An entry with no names covers nothing (TICK-0255): WatchCovers of an
+	-- empty list is true, and would drop every buff after it.
+	local function AddMissing(id, names)
+		for _, had in ipairs(missingNames) do
+			if had[1] ~= nil and WatchCovers(had, names) then return end
+		end
+		missing[#missing + 1] = id
+		missingNames[#missingNames + 1] = names
+	end
 	if HUDiniDB and C_UnitAuras and C_UnitAuras.GetAuraDataBySpellName then
 		local learned = ns.ClassDB().buffSpells or {}
 		local fight = InFight()
@@ -1692,9 +2101,9 @@ function ns.UpdateBuffMissing()
 				-- the name).
 				if learned[source] and IsState(source, e.spellID) then learned[source] = nil end
 				local on = BuffState(source, AuraNames(e), e.spellID)
-				if learned[source] and on == false and not missingID
-						and CountsNow(learned[source], fight) then
-					missingID = e.spellID
+				if learned[source] and on == false
+						and CountsNow(learned[source], fight) and not NoPetFor(source) then
+					AddMissing(e.spellID, AuraNames(e))
 				end
 			end
 		end
@@ -1708,23 +2117,41 @@ function ns.UpdateBuffMissing()
 		for _, source in ipairs(rest) do
 			local id = ns.SpellID(source)
 			if id and IsPlayerSpell and IsPlayerSpell(id)
-					and BuffState(source, AuraNamesFor(source)) == false and not missingID
-					and CountsNow(learned[source], fight) then
-				missingID = id
+					and BuffState(source, AuraNamesFor(source)) == false
+					and CountsNow(learned[source], fight) and not NoPetFor(source) then
+				AddMissing(id, AuraNamesFor(source))
 			end
 		end
 	end
 	-- A learned buff, a read ID or a setting: the game's watches too. In
 	-- the pass, so the form and the tracking are read once.
 	pcall(SyncWatches)
-	passTracking, inPass = nil, false
-	ns.buffMissing   = missingID ~= nil
-	ns.missingBuffID = missingID
+	-- TICK-0197: in a form that cannot cast a buff, none is missing.
+	local quiet = HUDiniDB ~= nil and FormQuiet()
+	if quiet then missing = {} end
+	ns.buffMissing    = missing[1] ~= nil
+	ns.missingBuffIDs = missing
+	-- A weapon with no weapon buff gets its own icon too (TICK-0198,
+	-- TICK-0252). Core.lua gives it its own reason (why.weaponBuff). Its
+	-- sound (TICK-0250) looks at each pass: on when the weapon buff has an
+	-- icon, unsure when the game would not say.
+	local weaponID, unsure = nil, false
+	if not quiet and HUDiniDB and ns.WeaponBuffIcon then
+		local ok, id, notSure = pcall(ns.WeaponBuffIcon)
+		if ok then weaponID = id end
+		unsure = not ok or notSure == true
+	end
+	ns.missingWeaponID = weaponID
+	ns.missingBuffID   = missing[1] or weaponID
+	if HUDiniDB and ns.SyncWeaponBuffSound then pcall(ns.SyncWeaponBuffSound, weaponID ~= nil, unsure) end
 	-- The red layers: a fight's start or end, a learned buff, the setting.
+	-- Still in the pass, so the form is read once (each Under asks it).
+	-- UpdateUnder and ns.WeaponBuffIcon are in a pcall: the pass ends.
 	for i = 1, #HUDini.spells do
 		local f = HUDini.icons[i]
 		if f then UpdateUnder(f, HUDini.spells[i]) end
 	end
+	passTracking, inPass = nil, false
 	if ns.UpdateOwnBuffIcon then ns.UpdateOwnBuffIcon() end
 end
 
@@ -1783,8 +2210,11 @@ local function Under(f, e)
 	if want then
 		local source = Plain(C_Spell.GetSpellName(e.spellID))
 		local length = type(source) == "string" and (ns.ClassDB().buffSpells or {})[source]
-		want = length and CountsNow(length, InFight()) and Covers(s, e) and true or false
+		want = length and CountsNow(length, InFight()) and Covers(s, e)
+			and not NoPetFor(source) and true or false
 	end
+	-- TICK-0197: no buff is missing in a formQuiet form.
+	if want and FormQuiet() then want = false end
 	u:SetShown(want)
 end
 
@@ -1871,11 +2301,33 @@ local function OnCast(spellID)
 	-- own-buff look below: that look also redraws the keep-up icon
 	-- (TICK-0166), which must not flash on (and sound) for a buff just cast.
 	local keptUp = false
+	-- The icon of a buff not for a fight (TICK-0196): the fight buff cast last.
+	local notIn = NotInFightNames()
+	if #notIn > 0 then
+		for _, name in ipairs(FightNames(notIn)) do
+			if name == cast then lastFightBuff = cast end
+		end
+	end
 	for _, name in ipairs(KeepUpNames(ns.ClassValue("keepUp"))) do
 		if name == cast then
 			CastOn(KEEP_UP, ends)
 			keptUp = true
 			break
+		end
+	end
+	-- The tank buff and its with list (TICK-0208), the same way.
+	local tankBuff, tankWith = TankBuff()
+	if tankBuff then
+		if cast == tankBuff then
+			CastOn(TANK_BUFF, ends)
+			keptUp = true
+		end
+		for _, name in ipairs(tankWith) do
+			if name == cast then
+				CastOn(TANK_WITH, ends or now + TANK_WITH_LASTS)
+				keptUp = true
+				break
+			end
 		end
 	end
 	ns.UpdateBuffMissing()
@@ -1896,6 +2348,12 @@ end
 -- off hand or a fishing pole needs nothing. Asked fresh every
 -- time, so it needs no event, and an unreadable answer never counts as
 -- missing.
+--
+-- Out of a fight, a weapon with none puts its weapon buff on an own-buff
+-- icon by your health bar (ns.missingWeaponID, TICK-0198), after the icons
+-- of the learned buffs that are off (TICK-0252): the one HUDini last read
+-- on that hand, else the first you know in class file order. In a fight your auras are hidden, so the
+-- answer is "cannot say" and the icon goes.
 --------------------------------------------------------------------------------
 
 local MAIN_HAND, OFF_HAND = 16, 17
@@ -2024,31 +2482,155 @@ local function WeaponBuffOnYou(spells)
 	return false
 end
 
--- True, false, or nil when the game will not say.
-local function HandBuffed(slot, has, words)
+-- True, false, or nil when the game will not say. With spells, also the
+-- spell whose word the tooltip shows (words[i] is spells[i]'s).
+local function HandBuffed(slot, has, words, spells)
 	if ns.IsSecret(has) then return nil end
-	if has then return true end
+	-- In a fight a buffed hand reads no tooltip: ShouldShow asks on each
+	-- check, and the icon shows out of a fight only.
+	if has and (not spells or ns.InCombat()) then return true end
+	local which
 	local found = TooltipFind(slot, function(text)
-		for _, word in ipairs(words) do
-			if text:find(word, 1, true) then return true end
+		for i, word in ipairs(words) do
+			if text:find(word, 1, true) then
+				which = spells and spells[i]
+				return true
+			end
 		end
 		return false
 	end)
+	-- The game says buffed: the tooltip only says which (a poison may
+	-- answer true), so the hand's last buff is remembered too.
+	if has then return true, which end
 	if found == nil then return nil end
-	return found ~= false
+	return found ~= false, which
+end
+
+local function Knows(spell)
+	local id = ns.SpellID(spell)
+	return id and IsPlayerSpell and IsPlayerSpell(id) and true or false
+end
+
+-- The weapon buff alert (TICK-0250): saved per class as weaponBuffAlert,
+-- on at the start (nothing saved), off saved as false. Off, HUDini looks
+-- at no weapon: no icon, no sound, and the HUD does not show for it
+-- (why.weaponBuff). Only a class whose file has weaponBuff has the alert
+-- (ns.HasWeaponBuffAlert); the setting is saved for any class, as the
+-- other class settings are.
+function ns.HasWeaponBuffAlert()
+	return ns.ClassValue("weaponBuff") ~= nil
+end
+
+function ns.GetWeaponBuffAlert()
+	return not (HUDiniDB and ns.ClassDB().weaponBuffAlert == false)
+end
+
+-- True if it changed. On saves nothing.
+function ns.SetWeaponBuffAlert(on)
+	if not HUDiniDB then return false end
+	local want = on and true or false
+	if ns.GetWeaponBuffAlert() == want then return false end
+	if want then
+		ns.ClassDB().weaponBuffAlert = nil
+	else
+		ns.ClassDB().weaponBuffAlert = false
+	end
+	return true
+end
+
+-- After a change of the alert or its sound: the icon, and the HUD it can
+-- show, follow now. A sound picked while the icon shows waits for the
+-- next showing.
+function ns.RefreshWeaponBuffAlert()
+	if not HUDiniDB then return end
+	ns.UpdateBuffMissing()
+	if HUDini.UpdateVisibility then HUDini:UpdateVisibility() end
+end
+
+-- The weapon buff a weapon in your hands needs, by name, or nil: none
+-- needs one, or the game will not say. Each hand's buff read on its
+-- tooltip is remembered (weaponBuffLast), so the icon shows the one you
+-- use there. A nil also returns true when the game would not say, so the
+-- sound does not count a showing twice (ns.SyncWeaponBuffSound).
+local function WeaponBuffWanted()
+	if not ns.GetWeaponBuffAlert() then return nil end
+	local spells = ns.ClassValue("weaponBuff")
+	if not (spells and GetWeaponEnchantInfo and KnowsAny(spells)) then return nil end
+	local onYou = WeaponBuffOnYou(spells)
+	if onYou ~= false then return nil, onYou == nil end
+	local ok, hasMain, _, _, _, hasOff = pcall(GetWeaponEnchantInfo)
+	if not ok then return nil, true end
+	local words = BuffWords(spells)
+	local mine = HUDiniDB and ns.ClassDB()
+	local bare, unsure
+	for _, hand in ipairs({ { MAIN_HAND, hasMain }, { OFF_HAND, hasOff } }) do
+		local slot, has = hand[1], hand[2]
+		if HoldsWeapon(slot) then
+			local buffed, which = HandBuffed(slot, has, words, spells)
+			if which and mine then
+				if type(mine.weaponBuffLast) ~= "table" then mine.weaponBuffLast = {} end
+				mine.weaponBuffLast[slot] = which
+			end
+			if buffed == false and not bare then bare = slot end
+			if buffed == nil then unsure = true end
+		end
+	end
+	if not bare then return nil, unsure end
+	local last = mine and type(mine.weaponBuffLast) == "table" and mine.weaponBuffLast[bare]
+	if last and Knows(last) then return last end
+	for _, spell in ipairs(spells) do
+		if Knows(spell) then return spell end
+	end
+	return nil
 end
 
 function ns.WeaponBuffMissing()
-	local spells = ns.ClassValue("weaponBuff")
-	if not (spells and GetWeaponEnchantInfo and KnowsAny(spells)) then return false end
-	if WeaponBuffOnYou(spells) ~= false then return false end
-	local ok, hasMain, _, _, _, hasOff = pcall(GetWeaponEnchantInfo)
-	if not ok then return false end
-	local words = BuffWords(spells)
-	for slot, has in pairs({ [MAIN_HAND] = hasMain, [OFF_HAND] = hasOff }) do
-		if HoldsWeapon(slot) and HandBuffed(slot, has, words) == false then return true end
+	return WeaponBuffWanted() ~= nil
+end
+
+-- The weapon buff's spell ID for the own-buff icon: the grid entry's own ID
+-- when the spell is on the grid (the glow finds its icon by it), else the
+-- client's ID for its name. Nil out of a fight with no weapon buff missing,
+-- and always in a fight. InFight, not ns.InCombat: UnitAffectingCombat can
+-- stay true past PLAYER_REGEN_ENABLED, and the icon is back at the fight's
+-- end check. A nil also returns true when the game would not say.
+function ns.WeaponBuffIcon()
+	if InFight() then return nil end
+	local spell, unsure = WeaponBuffWanted()
+	if not spell then return nil, unsure end
+	for _, e in ipairs(HUDini.spells) do
+		if e.spellID and Plain(C_Spell.GetSpellName(e.spellID)) == spell then return e.spellID end
 	end
-	return false
+	return ns.SpellID(spell)
+end
+
+-- The weapon buff sound (TICK-0250, Alerts.lua ns.WEAPON_BUFF_SOUND): off
+-- at the start. It plays once as the weapon buff icon starts to show: a
+-- weapon goes bare, a bare weapon goes in your hand, a fight ends with a
+-- bare weapon. It has its own icon beside a learned buff's (TICK-0252), so
+-- a learned buff off or cast does not change it. It plays again only after
+-- the icon went. The icon shows out of a fight only, so no sound
+-- plays in one. A pass where the game would not say (a tooltip not yet
+-- read) changes nothing, so a showing is not counted twice.
+-- picked: the weapon buff has an own-buff icon (ns.UpdateBuffMissing).
+local weaponSounded = false
+
+function ns.SyncWeaponBuffSound(picked, unsure)
+	local db = HUDiniDB
+	if not db then return end
+	-- Test mode: the own-buff icon holds still, so the sound waits too. A
+	-- bare weapon still there at its end is a new showing.
+	if ns.AlertSamplesUp and ns.AlertSamplesUp() then return end
+	if not (picked and db.warnOwnBuff and db.showHealth) then
+		if not unsure then weaponSounded = false end
+		return
+	end
+	if weaponSounded then return end
+	weaponSounded = true
+	local s = ns.WEAPON_BUFF_SOUND
+	if not (s and ns.GetClassAlertSound and ns.PlaySoundChoice) then return end
+	local saved = ns.GetClassAlertSound(s.setting)
+	if ns.SoundChoice(saved, s.sound) then ns.PlaySoundChoice(saved, s.sound) end
 end
 
 -- For /hud debug weapon: what the game says, raw, and what HUDini makes of it.
@@ -2273,6 +2855,7 @@ local function OnUnitAura(unit)
 	Call(ns.UpdateAlerts)
 end
 
+local petWasOut -- PetOut() at the last pet event (TICK-0192)
 local events = CreateFrame("Frame")
 events:RegisterEvent("PLAYER_ENTERING_WORLD")
 events:SetScript("OnEvent", function(self, event, unit, info, spellID)
@@ -2303,10 +2886,30 @@ events:SetScript("OnEvent", function(self, event, unit, info, spellID)
 		end
 		return
 	end
+	if event == "UNIT_PET" or event == "UNIT_FLAGS" then
+		-- TICK-0192: a pet comes, goes or dies, so a pet buff starts or
+		-- stops counting. Only for a class with pet buffs, and only when
+		-- the answer changed: UNIT_FLAGS comes often in a fight.
+		local out = PetOut()
+		if out ~= petWasOut then
+			petWasOut = out
+			if HUDiniDB and PetBuffs() then Call(ns.UpdateBuffMissing) end
+		end
+		return
+	end
+	if event == "UNIT_INVENTORY_CHANGED" or event == "PLAYER_EQUIPMENT_CHANGED" then
+		-- A weapon buff put on, or a weapon changed (TICK-0198). Equipping
+		-- fires both events, so the check runs twice: cheap, out of a fight.
+		if HUDiniDB then Call(ns.UpdateBuffMissing) end
+		return
+	end
 	if event == "SPELLS_CHANGED" then
 		-- A new tracking spell joins the minimap's list: read it again.
 		minimapTracking = nil
 		viewerNames = {}
+		-- A new rank: a watch name's ID is asked again at the next sync out
+		-- of a fight (a watch's IDs change only out of a fight).
+		ClearNameIDs()
 		return
 	end
 	if event == "PLAYER_ENTERING_WORLD" then
@@ -2315,6 +2918,11 @@ events:SetScript("OnEvent", function(self, event, unit, info, spellID)
 		pcall(self.RegisterEvent, self, "PLAYER_REGEN_ENABLED")
 		pcall(self.RegisterEvent, self, "PLAYER_REGEN_DISABLED")
 		pcall(self.RegisterEvent, self, "SPELLS_CHANGED")
+		pcall(self.RegisterUnitEvent, self, "UNIT_INVENTORY_CHANGED", "player")
+		pcall(self.RegisterEvent, self, "PLAYER_EQUIPMENT_CHANGED")
+		pcall(self.RegisterUnitEvent, self, "UNIT_PET", "player") -- TICK-0192
+		pcall(self.RegisterUnitEvent, self, "UNIT_FLAGS", "pet")
+		petWasOut = PetOut()
 		-- Fired after a restriction ends, so your auras read again (TICK-0125).
 		-- Also fired before one starts; it is not enforced until the event
 		-- is done, so those reads are plain too.

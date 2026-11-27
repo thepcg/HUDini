@@ -24,8 +24,12 @@ end
 -- A world for one class: the grid holds spell IDs, w.auras[name] = duration
 -- (0 = no end). w.form is the spell ID of the form you are in (nil = none);
 -- w.formID is what GetShapeshiftFormID gives.
+-- The test class files (classes_fixture.lua), so a class seat's trackBuff
+-- row changes no test here (TICK-0204).
+local Classes = assert(loadstring(H.readFile("tools/tests/classes_fixture.lua")))()
+
 local function World(opts)
-	local w = H.world()
+	local w = Classes.Use(H.world())
 	w.class, w.className = opts.class, opts.className
 	if opts.secret then
 		w.env.issecretvalue = type(opts.secret) == "function" and opts.secret

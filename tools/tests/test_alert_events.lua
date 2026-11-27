@@ -82,7 +82,9 @@ H.test("a duel on the target and an equipment change re-run the alerts", functio
 	local w, ns = World()
 	for _, event in ipairs({ "UNIT_FACTION", "DUEL_FINISHED", "PLAYER_EQUIPMENT_CHANGED" }) do
 		-- UNIT_FACTION: the alerts, and Bars.lua for the PvP marks (TICK-0097).
-		H.eq(Listeners(w, event), event == "UNIT_FACTION" and 2 or 1, event .. " listened to")
+		-- PLAYER_EQUIPMENT_CHANGED: the alerts, and Auras.lua for the weapon
+		-- buff icon (TICK-0198).
+		H.eq(Listeners(w, event), event == "DUEL_FINISHED" and 1 or 2, event .. " listened to")
 		local alerts = Count(ns, "UpdateAlerts")
 		w:fire(event, event == "UNIT_FACTION" and "target" or 16)
 		H.eq(alerts.n, 1, event .. " re-runs the alerts")

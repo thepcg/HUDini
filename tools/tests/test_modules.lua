@@ -506,3 +506,39 @@ H.test("/hud feedsession reset while the feed is off starts a clock that waits f
 	H.eq(ns.Feed.session, s, "on again: the reset session carries on")
 	H.eq(s.start, math.floor(w.time), "from now")
 end)
+
+-- TICK-0239: an event listed with units is registered for those units
+-- only, so a unit event of every unit nearby does not wake the handler.
+H.test("a module's unit event is registered for the units it names only", function()
+	local w = H.world()
+	local ns = w:loadAddon()
+	local on, heard = false, {}
+	local M = ns.NewModule("unitTest", { isOn = function() return on end })
+	M:On("UNIT_HEALTH", function(_, unit) heard[#heard + 1] = "health " .. unit end, "player")
+	M:On("PLAYER_MONEY", function() heard[#heard + 1] = "money" end)
+	on = true
+	ns.UpdateModules()
+	H.eq(M.enabled, true)
+	local h = M.frame.__h
+	H.eq(h.events.UNIT_HEALTH, true, "registered")
+	H.ok(h.units.UNIT_HEALTH and h.units.UNIT_HEALTH.player and next(h.units.UNIT_HEALTH, "player") == nil,
+		"for the player only")
+	H.eq(h.units.PLAYER_MONEY, nil, "an event with no units: for all, as before")
+	-- Listed while on: registered at once, with its units.
+	M:On("UNIT_POWER_UPDATE", function(_, unit) heard[#heard + 1] = "power " .. unit end, "player", "target")
+	H.ok(h.units.UNIT_POWER_UPDATE and h.units.UNIT_POWER_UPDATE.player and h.units.UNIT_POWER_UPDATE.target,
+		"two units")
+	w:fire("UNIT_HEALTH", "party1")
+	w:fire("UNIT_HEALTH", "player")
+	w:fire("UNIT_POWER_UPDATE", "target")
+	w:fire("PLAYER_MONEY")
+	H.eq(table.concat(heard, ","), "health player,power target,money")
+	-- Off and on again: the units stay.
+	on = false
+	ns.UpdateModules()
+	H.eq(h.events.UNIT_HEALTH, nil, "off: none")
+	on = true
+	ns.UpdateModules()
+	H.ok(h.units.UNIT_HEALTH and h.units.UNIT_HEALTH.player and not h.units.UNIT_HEALTH.target,
+		"on again: the player only")
+end)

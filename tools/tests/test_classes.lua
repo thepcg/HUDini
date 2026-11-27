@@ -79,11 +79,23 @@ local SHAPE = {
 	end,
 	resource = function(v)
 		if type(v) ~= "table" then return "not a table" end
-		if type(v.aura) == "string" and type(v.max) == "number" then return nil end
-		if type(v.power) == "string" and (v.onlyWith == nil or type(v.onlyWith) == "string") then
+		local function One(e)
+			if type(e) ~= "table" then return false end
+			-- TICK-0238: prefer = true, filter = "HARMFUL" (or "HELPFUL").
+			if e.prefer ~= nil and e.prefer ~= true then return false end
+			if e.filter ~= nil and e.filter ~= "HARMFUL" and e.filter ~= "HELPFUL" then return false end
+			if type(e.aura) == "string" and type(e.max) == "number" then return true end
+			return type(e.power) == "string" and (e.onlyWith == nil or type(e.onlyWith) == "string")
+		end
+		if One(v) then return nil end
+		-- An ordered list of them (TICK-0199): the first buff on you.
+		if #v > 0 and next(v, #v) == nil then
+			for _, e in ipairs(v) do
+				if not One(e) then return "a list entry is neither { aura, max } nor { power, onlyWith }" end
+			end
 			return nil
 		end
-		return "neither { aura, max } nor { power, onlyWith }"
+		return "neither { aura, max } nor { power, onlyWith }, nor a list of them"
 	end,
 	auraMap = function(v)
 		if type(v) ~= "table" then return "not a table" end
@@ -102,6 +114,37 @@ local SHAPE = {
 	end,
 	keepUpSoundOn = function(v)
 		if type(v) ~= "boolean" then return "not true or false" end
+	end,
+	trackBuff = function(v)
+		if not IsList(v) then return "not a list of spell names" end
+	end,
+	-- TICK-0196: each name is also a keep-up name (the icon is a keep-up
+	-- name not in this list).
+	notInFight = function(v, p)
+		if not IsList(v) then return "not a list of spell names" end
+		local keep = {}
+		for _, name in ipairs(type(p.keepUp) == "table" and p.keepUp or {}) do keep[name] = true end
+		for _, name in ipairs(v) do
+			if not keep[name] then return name .. " is not in keepUp" end
+		end
+	end,
+	-- TICK-0197: lists of form names; a form is in one of the two only.
+	formQuiet = function(v, p)
+		if not IsList(v) then return "not a list of form names" end
+		local other = {}
+		for _, name in ipairs(type(p.formQuietSound) == "table" and p.formQuietSound or {}) do other[name] = true end
+		for _, name in ipairs(v) do
+			if other[name] then return name .. " is in formQuietSound too" end
+		end
+	end,
+	formQuietSound = function(v)
+		if not IsList(v) then return "not a list of form names" end
+	end,
+	-- TICK-0208: { buff = "Righteous Fury", with = { "Seal of Fury" } }.
+	tankBuff = function(v)
+		if type(v) ~= "table" then return "not a table" end
+		if type(v.buff) ~= "string" or v.buff == "" then return "buff is not a spell name" end
+		if not IsList(v.with) then return "with is not a list of spell names" end
 	end,
 	-- TICK-0182: rows of { key, make | needs, items, buff?, on? }.
 	missingItem = function(v)
@@ -124,10 +167,66 @@ local SHAPE = {
 			end
 			if row.buff ~= nil and type(row.buff) ~= "string" then return at .. ": buff is not a spell name" end
 			if row.on ~= nil and type(row.on) ~= "boolean" then return at .. ": on is not true or false" end
+			if row.few ~= nil and (type(row.few) ~= "number" or row.few < 1 or row.few % 1 ~= 0) then
+				return at .. ": few is not a whole number of 1 or more"
+			end
 		end
+	end,
+	-- TICK-0192: { revive?, call?, feed?, sacrifice?, buffs? }, one of the first three.
+	pet = function(v)
+		if type(v) ~= "table" then return "not a table" end
+		for k, x in pairs(v) do
+			if k == "revive" or k == "feed" then
+				if type(x) ~= "string" or x == "" then return k .. " is not a spell name" end
+			elseif k == "call" then
+				if type(x) ~= "string" and not (IsList(x) and #x > 0) then
+					return "call is not a spell name or a list"
+				end
+			elseif k == "sacrifice" or k == "buffs" then
+				if not (IsList(x) and #x > 0) then return k .. " is not a list of buff names" end
+			else
+				return "unknown field " .. tostring(k)
+			end
+		end
+		if v.revive == nil and v.call == nil and v.feed == nil then return "no revive, call or feed" end
 	end,
 	powers = function(v)
 		if not IsList(v) then return "not a list of power tokens" end
+	end,
+	-- Default looks (TICK-0224): resource and timer = { [spell] = look }.
+	barLooks = function(v)
+		if type(v) ~= "table" then return "not a table" end
+		local GRADIENTS = { off = true, darker = true, lighter = true, color = true }
+		local function Look(at, look)
+			if type(look) ~= "table" then return at .. " is not a look" end
+			for k, x in pairs(look) do
+				if k == "texture" then
+					if type(x) ~= "string" or x == "" then return at .. ": texture is not a name" end
+				elseif k == "gradient" then
+					if not GRADIENTS[x] then return at .. ": gradient is not off, darker, lighter or color" end
+				elseif k == "color" then
+					if type(x) ~= "table" or type(x[1]) ~= "number" or type(x[2]) ~= "number"
+						or type(x[3]) ~= "number" then return at .. ": color is not { r, g, b }" end
+				else
+					return at .. ": unknown field " .. tostring(k)
+				end
+			end
+		end
+		for k, x in pairs(v) do
+			if k == "resource" then
+				local bad = Look("resource", x)
+				if bad then return bad end
+			elseif k == "timer" then
+				if type(x) ~= "table" then return "timer is not a table" end
+				for spell, look in pairs(x) do
+					if type(spell) ~= "string" or spell == "" then return "a timer key is not a spell name" end
+					local bad = Look("timer " .. spell, look)
+					if bad then return bad end
+				end
+			else
+				return "unknown bar " .. tostring(k)
+			end
+		end
 	end,
 	ids = function(v)
 		if type(v) ~= "table" then return "not a table" end
@@ -155,12 +254,34 @@ H.test("each class file registers one profile, for the class it is named after",
 	end
 end)
 
+H.test("notInFight: a list of keep-up names", function()
+	H.eq(SHAPE.notInFight({ "Aspect of the Cheetah" }, { keepUp = { "Aspect of the Hawk", "Aspect of the Cheetah" } }),
+		nil, "a keep-up name")
+	H.ok(SHAPE.notInFight({ "Aspect of the Cheetah" }, { keepUp = { "Aspect of the Hawk" } }), "not a keep-up name")
+	H.ok(SHAPE.notInFight({ "Aspect of the Cheetah" }, {}), "no keepUp")
+	H.ok(SHAPE.notInFight("Aspect of the Cheetah", { keepUp = { "Aspect of the Cheetah" } }), "not a list")
+end)
+
+H.test("formQuiet: a list of forms, none also in formQuietSound", function()
+	H.eq(SHAPE.formQuiet({ "Travel Form" }, { formQuietSound = { "Bear Form" } }), nil, "two lists")
+	H.ok(SHAPE.formQuiet({ "Travel Form" }, { formQuietSound = { "Travel Form" } }), "in both")
+	H.ok(SHAPE.formQuiet("Travel Form", {}), "not a list")
+	H.ok(SHAPE.formQuietSound({ 783 }), "not a name")
+end)
+
+H.test("resource: prefer and filter (TICK-0238)", function()
+	H.eq(SHAPE.resource({ { aura = "A", max = 5, prefer = true }, { aura = "B", max = 3 } }), nil, "prefer")
+	H.eq(SHAPE.resource({ aura = "A", max = 4, filter = "HARMFUL" }), nil, "a debuff")
+	H.ok(SHAPE.resource({ aura = "A", max = 5, prefer = "yes" }), "prefer not true")
+	H.ok(SHAPE.resource({ aura = "A", max = 4, filter = "harmful" }), "an unknown filter")
+end)
+
 H.test("every key in a class profile is one Classes.lua knows, in its shape", function()
 	local keys = KnownKeys()
 	for file, regs in pairs(Registered()) do
 		for key, value in pairs(regs[1].profile) do
 			H.ok(keys[key], file .. ": unknown key " .. tostring(key))
-			local err = SHAPE[key](value)
+			local err = SHAPE[key](value, regs[1].profile)
 			H.ok(err == nil, file .. ": " .. key .. " " .. tostring(err))
 		end
 	end
@@ -233,4 +354,52 @@ H.test("a secret spell ID from a name is no ID", function()
 	H.eq(ns.SpellID("Counterspell"), 4242, "plain")
 	w.secret[4242] = true
 	H.eq(ns.SpellID("Counterspell"), nil, "secret: none")
+end)
+
+-- Lines in the class files that no other test reads (review-board, the
+-- TICK-0196 and TICK-0238 class branches): removing one must fail here.
+local function ProfileOf(token)
+	for _, list in pairs(Registered()) do
+		for _, r in ipairs(list) do
+			if r.token == token then return r.profile end
+		end
+	end
+end
+
+H.test("SHAMAN prefers Maelstrom Weapon on the resource bar (TICK-0238)", function()
+	local p = assert(ProfileOf("SHAMAN"), "no SHAMAN profile")
+	local found
+	for _, e in ipairs(type(p.resource) == "table" and p.resource or {}) do
+		if type(e) == "table" and e.aura == "Maelstrom Weapon" then found = e end
+	end
+	H.ok(found, "a Maelstrom Weapon entry")
+	H.eq(found and found.prefer, true, "Maelstrom Weapon has prefer = true")
+end)
+
+H.test("HUNTER notInFight: the Cheetah and the Pack, both keep-up aspects (TICK-0196)", function()
+	local p = assert(ProfileOf("HUNTER"), "no HUNTER profile")
+	local set = function(list)
+		local out = {}
+		for _, n in ipairs(type(list) == "table" and list or {}) do out[n] = true end
+		return out
+	end
+	local notIn, keepUp = set(p.notInFight), set(p.keepUp)
+	for _, name in ipairs({ "Aspect of the Cheetah", "Aspect of the Pack" }) do
+		H.ok(notIn[name], name .. " is in notInFight")
+		H.ok(keepUp[name], name .. " is a keep-up aspect")
+	end
+end)
+
+H.test("HUNTER pet: Revive Pet, Call Pet and Feed Pet (TICK-0192)", function()
+	local p = assert(ProfileOf("HUNTER"), "no HUNTER profile")
+	H.eq(H.diff(p.pet, { revive = "Revive Pet", call = { "Call Pet" }, feed = "Feed Pet" }), nil, "the pet line")
+end)
+
+H.test("WARLOCK pet: the five summons, the four sacrifice buffs and Soul Link (TICK-0192)", function()
+	local p = assert(ProfileOf("WARLOCK"), "no WARLOCK profile")
+	H.eq(H.diff(p.pet, {
+		call = { "Summon Imp", "Summon Voidwalker", "Summon Succubus", "Summon Incubus", "Summon Felhunter" },
+		sacrifice = { "Burning Wish", "Fel Stamina", "Touch of Shadow", "Fel Energy" },
+		buffs = { "Soul Link" },
+	}), nil, "the pet line")
 end)

@@ -2,7 +2,7 @@
 ## Title: HUDini
 ## Notes: A heads-up display for every character: your action bars in keybind order, with your bars and your target's right above them. It hides when nothing needs you.
 ## Author: Edag
-## Version: 0.31.0
+## Version: 0.32.0
 ## SavedVariables: HUDiniDB
 ## IconTexture: Interface\AddOns\HUDini\Media\icon
 ## AddonCompartmentFunc: HUDini_OnAddonCompartmentClick
@@ -26,6 +26,8 @@ Classes\Paladin.lua
 Classes\Priest.lua
 Classes\Shaman.lua
 Classes\Warlock.lua
+BarLooks.lua
+Sounds.lua
 Bars.lua
 XP.lua
 Alerts.lua
@@ -43,7 +45,11 @@ Styles.lua
 TestMode.lua
 Mover.lua
 ErrorVoice.lua
+CursorRing.lua
+SoundAlerts.lua
 About.lua
 Setup.lua
 MinimapButton.lua
+BarLookButton.lua
 Options.lua
+OptionsGrid.xml

@@ -150,7 +150,7 @@ Names, not IDs: one name covers every rank.
 |---|---|
 | `interrupt` | the interrupt outline on the target cast bar |
 | `dispel` | one spell per debuff type; the power bar takes the color of one you can remove |
-| `purge` | a spell that takes magic buffs, or `{ spell, stealable = true }` |
+| `purge` | a spell that takes magic buffs, or `{ spell, stealable = true }`, or `{ spell, enrage = true }` for an Enrage only (Tranquilizing Shot) |
 | `keepUp` | the combat buffs: in a fight with none on, the first one you know shows by the health bar |
 | `resource` | `{ aura = name, max = pips }` or a power type; nil for no resource bar |
 | `auraMap` | extra buff names for an icon |
@@ -246,19 +246,31 @@ too.
   build is running. The game reads the .toc only at start, so a new version
   needs a full restart, not `/reload`.
 
-### A dead end, kept as a warning
+### The aura container: what works, and what the game refuses
 
-The first resource bar went through 12.1's `AuraContainer` and
-`AuraButton:SetApplicationBar`. It fails, in two steps:
+12.1's `AuraContainer` and `AuraButton:SetApplicationBar` draw the
+resource bar in a fight (TICK-0220). A fight hides your auras, so the
+plain aura read (`C_UnitAuras.GetAuraDataBySpellName`) finds nothing, but
+the game's own container still draws the buff, and its button fills a
+StatusBar from the buff's stack count. HUDini reads nothing: the game shows
+the button only while the buff is on. One rule decides if it works: the bar
+must be part of the AuraButton from the start. Not seen in game yet:
+TICK-0220 waits for DK's play; so far the test harness proves it.
 
-1. `SetApplicationBar` rejects any bar that is not a descendant of the
-   AuraButton: `Blizzard_AuraContainerUtil.lua:279: bad object ... (must be a
-   direct child or indirect descendent of owner)`.
-2. You cannot move one in either:
-   `SetParent(): Reparenting disallowed as child object would inherit forbidden
-   aspects: UntrustedScriptExecution, UntrustedLayoutScriptExecution,
-   AlwaysPropagateInput, ScriptedInput`.
+1. **Allowed by the game's checks:** HUDini makes the StatusBar as the button's own child, in the
+   slot's `initializeFrame`, and hands it to `SetApplicationBar` (`Bars.lua`,
+   "The resource bar in a fight").
+2. **Refused:** `SetApplicationBar` rejects a bar that is not a descendant
+   of the AuraButton: `Blizzard_AuraContainerUtil.lua:279: bad object ...
+   (must be a direct child or indirect descendent of owner)`.
+3. **Refused:** you cannot move an addon bar into the button either:
+   `SetParent(): Reparenting disallowed as child object would inherit
+   forbidden aspects: UntrustedScriptExecution,
+   UntrustedLayoutScriptExecution, AlwaysPropagateInput, ScriptedInput`.
 
-An addon frame cannot become part of a Blizzard AuraButton. `AuraContainer`
-is for auras the game draws, not for feeding your own widgets. Use the plain
-aura read instead.
+The first resource bar tried steps 2 and 3 and stopped there. So: make the
+bar in the button, never move one in. Out of a fight, the plain aura read
+still draws the bar. The container is on only while your auras are hidden.
+HUDini makes the container, its fill and its place only out of a fight. In
+a fight it only switches the container on or off, and changes its spell
+IDs, through `pcall`.

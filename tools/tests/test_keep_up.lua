@@ -407,3 +407,33 @@ H.test("a secret length teaches nothing: a cast in the fight puts no new time on
 	Cast(w, SOR)
 	H.eq(TimeLeft(w, buff), 19.5, "no length read: the old time stays, not 30 s from the cast")
 end)
+
+-- TICK-0197: no keep-up icon in a form that cannot cast a buff. The
+-- class file's formQuiet = { "Travel Form" }; w.form is the form's ID.
+H.test("in a quiet form (Travel Form): no keep-up icon in the fight", function()
+	local spells = { [SOR] = "Seal of Righteousness", [SOTC] = "Seal of the Crusader", [783] = "Travel Form" }
+	local w, ns = World(function(w)
+		w.env.GetShapeshiftFormID = function() return w.form and 1 or nil end
+		w.env.GetShapeshiftForm = function() return w.form and 1 or 0 end
+		w.env.GetShapeshiftFormInfo = function(i)
+			if i == 1 and w.form then return 1000, true, true, w.form end
+		end
+	end, nil, nil, spells)
+	local default = ns.ClassDefault
+	ns.ClassDefault = function(key)
+		if key == "formQuiet" then return { "Travel Form" } end
+		return default(key)
+	end
+	Aura(w, "Seal of Righteousness", 30)
+	NoAura(w, "Seal of Righteousness")
+	Fight(w, true)
+	H.eq(Shown(w), "tex" .. SOR, "caster form: the icon")
+	w.form = 783
+	w:fire("UPDATE_SHAPESHIFT_FORM")
+	w:fire("UNIT_AURA", "player")
+	H.eq(Shown(w), nil, "Travel Form: no icon")
+	w.form = nil
+	w:fire("UPDATE_SHAPESHIFT_FORM")
+	w:fire("UNIT_AURA", "player")
+	H.eq(Shown(w), "tex" .. SOR, "caster form again: the icon")
+end)

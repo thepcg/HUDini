@@ -9,6 +9,13 @@
 	they hide and fade with it. With no saved place they sit under the left
 	end of the HUD, below the totem row when that is on, and move with it.
 
+	They can stay (TICK-0219, account wide, off by default): with
+	HUDiniDB.timerBarsStay on, the holder is a child of the anchor (HUDini,
+	which never hides or fades) in place of the body, so a running bar
+	stays in view while the HUD hides; with no running bar, nothing shows.
+	The anchor has the HUD's scale and layer, so the place and size are the
+	same either way.
+
 	Their own place (TICK-0169, D-044): while the HUD is unlocked a blue
 	box covers the bars (at least two rows, so there is always something
 	to grab); drag it to move them. The place is saved per class
@@ -81,8 +88,10 @@ local M = ns.NewModule("timerBars", {
 	end,
 	defaults = {
 		-- The look of the bars. Cosmetic: the designer's call (TICK-0158).
-		timerBarTexture = "hud",     -- a bar texture key, or "hud": the HUD's own bar texture
+		-- Each bar's texture is a bar look now (BarLooks.lua, TICK-0225).
 		timerBarTime    = "seconds", -- "seconds" (h.m.s) or "percent"
+		-- The bars stay in view when the HUD hides (TICK-0219).
+		timerBarsStay   = false,
 	},
 })
 
@@ -148,12 +157,6 @@ end
 -- A bar
 --------------------------------------------------------------------------------
 
-local function TexturePath()
-	local key = HUDiniDB.timerBarTexture
-	if key == nil or key == "hud" then return ns.BarTexturePath() end
-	return ns.TexturePathFor(key)
-end
-
 -- The time text: a binding the game updates by itself. A new binding for
 -- each format, so a change from seconds to percent leaves nothing behind.
 local function Binding(f)
@@ -183,9 +186,12 @@ local function Binding(f)
 	return bind
 end
 
+-- Each spell's bar wears its own look (BarLooks.lua, TICK-0224): its
+-- texture, else the old Timer bar texture row, else Bar texture.
 local function Style(f)
-	f.bar:SetStatusBarTexture(TexturePath())
-	f.bar:SetStatusBarColor(unpack(ns.BarColor("timer")))
+	-- Style runs only when the look changes: set the texture again too.
+	f.bar.lookAsked = nil
+	ns.PaintBar(f.bar, ns.TimerBarColor(f.bar.lookId))
 	local font = ns.BarFontPath()
 	local size = math.max(8, math.floor(f:GetHeight() * 0.6 + 0.5))
 	for _, fs in ipairs({ f.label, f.time }) do
@@ -242,9 +248,16 @@ local function DragStop()
 	Place()
 end
 
+-- The holder's parent: the body (the bars hide and fade with the HUD), or
+-- the anchor when they stay in view (TICK-0219).
+local function Parent()
+	if HUDiniDB and HUDiniDB.timerBarsStay then return HUDini end
+	return HUDini.body
+end
+
 local function Holder()
 	if holder then return holder end
-	holder = M:CreateFrame("Frame", "HUDiniTimerBars", HUDini.body)
+	holder = M:CreateFrame("Frame", "HUDiniTimerBars", Parent())
 	holder:SetSize(1, 1)
 	holder:SetMovable(true)
 	holder:SetClampedToScreen(true)
@@ -271,7 +284,7 @@ end
 local function Bar(name)
 	local f = bars[name]
 	if f then return f end
-	-- In the holder, a child of the body: only the body hides when idle.
+	-- In the holder: it hides when idle with the body, or stays (TICK-0219).
 	f = M:CreateFrame("Frame", nil, Holder())
 	f:EnableMouse(false)
 
@@ -302,6 +315,7 @@ local function Bar(name)
 	f.bar:SetPoint("BOTTOMRIGHT")
 	f.bar:SetMinMaxValues(0, 1)
 	f.bar:SetValue(0)
+	ns.LookBar(f.bar, ns.TimerLookId(name))
 
 	f.label = f.bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 	f.label:SetPoint("LEFT", 3, 0)
@@ -467,14 +481,18 @@ function Place()
 	if type(width) ~= "number" or width < h * 4 then width = iconSize * 6 end
 	width = width - 2
 	-- The look, as one key: a bar is styled again only when it changed.
+	-- Each bar adds its own texture and gradient (ns.BarLookKey).
 	local color = ns.BarColor("timer")
-	local look = table.concat({ tostring(TexturePath()), tostring(ns.BarFontPath()), h,
+	local look = table.concat({ tostring(ns.BarFontPath()), h,
 		tostring(color[1]), tostring(color[2]), tostring(color[3]), tostring(color[4]) }, "|")
 	local y = -GAP
 	if db.showTotems and ns.ClassToken() == "SHAMAN" then
 		y = y - (math.floor(iconSize * TOTEM + 0.5) + GAP)
 	end
 	local box = Holder()
+	-- A plain frame: a new parent is fine in a fight too.
+	local parent = Parent()
+	if box:GetParent() ~= parent then box:SetParent(parent) end
 	box:SetShown(M.enabled)
 	local unlocked = Unlocked()
 	local rows = #order
@@ -498,9 +516,10 @@ function Place()
 		f.icon:SetWidth(h)
 		f:ClearAllPoints()
 		f:SetPoint("TOPLEFT", box, "TOPLEFT", 0, -(i - 1) * (h + GAP))
-		if f.look ~= look then
+		local own = look .. "|" .. ns.BarLookKey(ns.TimerLookId(name))
+		if f.look ~= own then
 			Style(f)
-			f.look = look
+			f.look = own
 		end
 	end
 end

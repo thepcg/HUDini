@@ -7,8 +7,12 @@
 -- A shaman with Lightning Shield on the grid, learned at 600 s.
 -- w.auras[name]: the buff on you. w.inFight: your auras are hidden; then
 -- the name lookup gives nil, or throws with w.throw.
+-- The player is the test Mage (classes_fixture.lua): its buff sound starts
+-- off, so a class seat's keepUpSoundOn changes no test here (TICK-0209).
+local Classes = assert(loadstring(H.readFile("tools/tests/classes_fixture.lua")))()
+
 local function World()
-	local w = H.world()
+	local w = Classes.Use(H.world())
 	local env = w.env
 	w.secret = {}
 	env.issecretvalue = function(v) return v ~= nil and w.secret[v] == true end
@@ -192,7 +196,7 @@ end
 -- while Lightning Shield is on you; switched off, it hides it. w.slot: the
 -- slot's button.
 local function ContainerWorld(noViewer)
-	local w = H.world()
+	local w = Classes.Use(H.world())
 	local env = w.env
 	w.secret = {}
 	env.issecretvalue = function(v) return v ~= nil and w.secret[v] == true end
@@ -309,6 +313,13 @@ local function Again(w)
 	Shield(w)
 	if w.slot then Game(w.slot, true) end
 	w:fire("UNIT_AURA", "player")
+end
+
+-- A saved sound as text: a choice (TICK-0232) as "key@volume", any other
+-- value as it is.
+local function Saved(v)
+	if type(v) == "table" then return tostring(v.key) .. "@" .. tostring(v.volume) end
+	return v
 end
 
 H.test("its charges used up in a fight: the icon shows a frame later, and goes when it is on again", function()
@@ -702,6 +713,28 @@ H.test("no red layer with the red icon off, for a buff not learned, or with no r
 	H.eq(under:IsShown(), false, "the slot has no read ID: the button could stay hidden with the buff on")
 end)
 
+H.test("TICK-0192: a pet buff gives no red layer while no live pet is out", function()
+	local w, ns = ShieldedFight()
+	local under = Under(ns)
+	UsedUp(w)
+	w:runTimers()
+	H.eq(under:IsShown(), true, "no pet line: up, as before")
+	local default = ns.ClassDefault
+	ns.ClassDefault = function(key)
+		if key == "pet" then return { buffs = { "Lightning Shield" } } end
+		return default(key)
+	end
+	ns.UpdateBuffMissing()
+	H.eq(under:IsShown(), false, "a pet buff, no pet out: down")
+	w.env.UnitExists = function(u) return u == "player" or u == "pet" end
+	w:fire("UNIT_PET", "player")
+	H.eq(under:IsShown(), true, "a pet comes in the fight: up")
+	w.env.UnitIsDead = function(u) return u == "pet" end
+	w:fire("UNIT_FLAGS", "pet")
+	H.eq(under:IsShown(), false, "the pet dies: down")
+	EndFight(w)
+end)
+
 H.test("your auras hidden out of a fight: a short buff gives no red layer, a long one does", function()
 	local w, ns = ShieldedFight()
 	local under = Under(ns)
@@ -1076,7 +1109,7 @@ H.test("sound: the picked buff sound plays; an old save of true plays the defaul
 	H.eq(ns.GetKeepUpSoundChoice(), "off", "off by default")
 	H.eq(ns.SetKeepUpSound("whisper"), true, "picking a sound turns it on")
 	H.eq(ns.SetKeepUpSound("whisper"), false, "same again: no change")
-	H.eq(db.keepUpSound, "whisper", "saved per class")
+	H.eq(Saved(db.keepUpSound), "whisper@100", "saved per class")
 	H.eq(ns.GetKeepUpSound(), true, "on, for the old check box")
 	FightStart(w, ns)
 	H.eq(table.concat(w.sounds, " "), "3081", "the whisper tone")
@@ -1096,7 +1129,7 @@ H.test("sound: the buff sound choice: off, a key, true keeps the key", function(
 	H.eq(db.keepUpSound, nil, "nothing saved")
 	ns.SetKeepUpSound("coins")
 	H.eq(ns.SetKeepUpSound(true), false, "the old check box on: the pick stays")
-	H.eq(db.keepUpSound, "coins")
+	H.eq(Saved(db.keepUpSound), "coins@100")
 	H.eq(ns.SetKeepUpSound("off"), true, "off")
 	H.eq(db.keepUpSound, false, "off saves false (TICK-0181)")
 	H.eq(ns.GetKeepUpSound(), false)
@@ -1320,4 +1353,34 @@ H.test("the Combat buff icon still shows when your buff's icon is off or shows a
 	H.eq(ns2.missingBuffID, 324, "Lightning Shield off: your buff's icon")
 	H.eq(Which(ns2), "keepUp+ownBuff", "Water Shield off too: its own icon")
 	H.eq(LeftShown(w2, ns2), 2, "two icons")
+end)
+
+-- TICK-0197: a form that cannot cast a buff (the class file's formQuiet)
+-- puts the red layer down; the caster form puts it up again.
+H.test("in a quiet form (Travel Form), the red layer goes down", function()
+	local w, ns = ShieldedFight()
+	local under = Under(ns)
+	H.eq(under:IsShown(), true, "caster form: up")
+	local env = w.env
+	local name = env.C_Spell.GetSpellName
+	env.C_Spell.GetSpellName = function(id)
+		if id == 783 then return "Travel Form" end
+		return name(id)
+	end
+	env.GetShapeshiftFormID = function() return w.form and 1 or nil end
+	env.GetShapeshiftForm = function() return w.form and 1 or 0 end
+	env.GetShapeshiftFormInfo = function(i)
+		if i == 1 and w.form then return 1000, true, true, w.form end
+	end
+	local default = ns.ClassDefault
+	ns.ClassDefault = function(key)
+		if key == "formQuiet" then return { "Travel Form" } end
+		return default(key)
+	end
+	w.form = 783
+	ns.UpdateBuffMissing()
+	H.eq(under:IsShown(), false, "Travel Form: down")
+	w.form = nil
+	ns.UpdateBuffMissing()
+	H.eq(under:IsShown(), true, "caster form: up again")
 end)

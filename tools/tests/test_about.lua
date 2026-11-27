@@ -230,6 +230,9 @@ H.test("at every level the shares and promises sections show with their headers,
 		local p = f.parts
 		H.eq(p.sharesHeader:GetText(), T[0]["about.shares.header"], "level " .. l)
 		H.eq(p.shares:GetText(), T[l]["about.shares"], "level " .. l)
+		-- D-050, TICK-0230: the voice credit, its own paragraph after the fonts.
+		H.ok(p.shares:GetText():find("License texts are included with the addon.\n\nVoice alert sounds: Edag, made with ElevenLabs (elevenlabs.io).", 1, true),
+			"level " .. l .. ": the voice credit")
 		H.eq(p.promisesHeader:GetText(), T[0]["about.promises.header"], "level " .. l)
 		H.eq(p.promises:GetText(), T[l]["about.promises"], "level " .. l)
 		local order = { p.ai, p.sharesHeader, p.shares, p.promisesHeader, p.promises, p.help }

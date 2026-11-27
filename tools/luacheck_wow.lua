@@ -60,7 +60,7 @@ return {
 		"GetWeaponEnchantInfo", "GetXPExhaustion",
 		"InCombatLockdown", "IsControlKeyDown", "IsMetaKeyDown", "IsPlayerSpell", "IsResting", "IsShiftKeyDown", "IsXPUserDisabled",
 		"MuteSoundFile", "UnmuteSoundFile", -- legacy globals, no generated docs; DialogueUI calls them on Forever (TICK-0133)
-		"PlaySound", "RegisterAttributeDriver", "RegisterStateDriver", "ReloadUI", "ShowUIPanel",
+		"PlaySound", "PlaySoundFile", "RegisterAttributeDriver", "RegisterStateDriver", "ReloadUI", "ShowUIPanel",
 		"SpellHasRange", "UnregisterAttributeDriver",
 		"UnitAffectingCombat", "UnitCanAssist", "UnitCanAttack", "UnitCastingDuration",
 		"UnitCastingInfo", "UnitChannelDuration", "UnitChannelInfo", "UnitClass", "UnitClassification",

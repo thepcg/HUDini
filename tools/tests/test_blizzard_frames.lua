@@ -1315,3 +1315,148 @@ H.test("no pet frame or target of target on the client: the hides still work", f
 	H.eq(Seen(w.env.PlayerFrame), 0, "the player frame hides")
 	H.eq(Seen(w.env.TargetFrame), 0, "the target frame hides")
 end)
+
+-- Forever loads the Camelot bar priorities, with XP the lowest
+-- (Blizzard_StatusTrackingBar.toc, [AllowLoadGameType camelot]). The main
+-- container shows the first bar by priority, the secondary one the next
+-- (StatusTrackingManager.lua:54-86): with a watched reputation the XP bar
+-- is in the secondary container (TICK-0090). Each container has its own
+-- bars (InitializeBars, StatusTrackingManagerOverrides.lua:42-70) and keeps
+-- the index of the one it shows in shownBarIndex.
+local BARS = { None = -1, Reputation = 1, Experience = 4 }
+
+-- Both containers, each with its reputation bar, its XP bar and its art.
+local function TwoContainers(w)
+	w.env.StatusTrackingBarInfo = { BarsEnum = BARS }
+	local boxes = {}
+	for _, name in ipairs({ "MainStatusTrackingBarContainer", "SecondaryStatusTrackingBarContainer" }) do
+		local box = w.env[name] or w:Frame(name)
+		box.__h.children = {}
+		local rep, xp = w:Frame(nil, box), w:Frame(nil, box)
+		rep.__h.shown, xp.__h.shown = false, false
+		table.insert(box.__h.children, rep)
+		table.insert(box.__h.children, xp)
+		box.BarFrameTexture = w:Frame(nil, box)
+		box.bars = { [BARS.Reputation] = rep, [BARS.Experience] = xp }
+		box.shownBarIndex = BARS.None
+		boxes[#boxes + 1] = box
+	end
+	return boxes[1], boxes[2]
+end
+
+-- What ApplyPendingBarToShow does (StatusTrackingManager.lua:197-220): the
+-- old bar hides, the new one shows, then the index is set. A hide or show
+-- runs the frame's hooks, as in the game.
+local function Hooks(f, what)
+	for _, fn in ipairs(f.__h.hooks[what] or {}) do fn(f) end
+end
+local function ShowBar(box, index)
+	local old = box.bars[box.shownBarIndex]
+	if old then
+		old.__h.shown = false
+		Hooks(old, "OnHide")
+	end
+	local new = box.bars[index]
+	if new then
+		new.__h.shown = true
+		Hooks(new, "OnShow")
+	end
+	box.shownBarIndex = index
+end
+
+-- H = every part at alpha 0, S = a part shows.
+local function Box(box)
+	for _, part in ipairs({ box:GetChildren() }) do
+		if part.__h.alpha ~= 0 then return "S" end
+	end
+	return box.BarFrameTexture.__h.alpha == 0 and "H" or "S"
+end
+local function Boxes(main, second) return Box(main) .. Box(second) end
+
+H.test("Hide XP bar hides the container that holds the XP bar, and nothing else (TICK-0090)", function()
+	local w = H.world()
+	MakeFrames(w)
+	local main, second = TwoContainers(w)
+	ShowBar(main, BARS.Reputation)
+	ShowBar(second, BARS.Experience)
+
+	-- TICK-0087: no call that runs Edit Mode's Lua, no field written.
+	local calls, keys = {}, {}
+	for _, box in ipairs({ main, second }) do
+		for _, method in ipairs({ "Show", "Hide", "SetShown", "SetPoint", "ClearAllPoints",
+				"SetAllPoints", "SetScale", "SetParent", "SetAttribute", "SetAlpha" }) do
+			box[method] = function() calls[#calls + 1] = method end
+		end
+		keys[box] = {}
+		for k in pairs(box) do keys[box][k] = true end
+	end
+
+	w.env.HUDiniDB = { hideBlizzardXP = true }
+	w:loadAddon()
+	local db = w.env.HUDiniDB
+	H.eq(Boxes(main, second), "SH", "a watched reputation: the reputation bar shows, XP in the secondary container is hidden")
+
+	-- The watched reputation cleared: the game moves the XP bar to the main
+	-- container, at no event HUDini hears.
+	ShowBar(second, BARS.None)
+	ShowBar(main, BARS.Experience)
+	w:runTimers()
+	H.eq(Boxes(main, second), "HS", "no watched reputation: XP in the main container is hidden, the empty secondary one is given back")
+
+	-- A reputation watched again.
+	ShowBar(main, BARS.Reputation)
+	ShowBar(second, BARS.Experience)
+	w:runTimers()
+	H.eq(Boxes(main, second), "SH", "watched again: the reputation bar comes back")
+
+	-- No XP bar in either (no XP to earn: the game shows none).
+	ShowBar(second, BARS.None)
+	w:runTimers()
+	H.eq(Boxes(main, second), "SS", "no XP bar in either container: both shown")
+	ShowBar(second, BARS.Experience)
+	w:runTimers()
+	H.eq(Boxes(main, second), "SH", "the XP bar back in the secondary container")
+
+	w.env.EventRegistry:TriggerEvent("EditMode.Enter")
+	H.eq(Boxes(main, second), "SS", "Edit Mode: both shown")
+	w.env.EventRegistry:TriggerEvent("EditMode.Exit")
+	H.eq(Boxes(main, second), "SH", "after Edit Mode")
+
+	db.hideBlizzardXP = false
+	w.ns.HUDini:Apply()
+	H.eq(Boxes(main, second), "SS", "Hide XP bar off: both shown")
+	ShowBar(second, BARS.None)
+	ShowBar(main, BARS.Experience)
+	w:runTimers()
+	H.eq(Boxes(main, second), "SS", "Hide XP bar off: a moved XP bar still shows")
+
+	H.eq(table.concat(calls, ", "), "", "calls on the XP containers")
+	local added = {}
+	for box, seen in pairs(keys) do
+		for k in pairs(box) do
+			if not seen[k] then added[#added + 1] = tostring(k) end
+		end
+	end
+	H.eq(table.concat(added, ", "), "", "fields HUDini wrote on the XP containers")
+end)
+
+-- A client without the bar index or the container's shownBarIndex: Hide XP
+-- bar hides the main container only, as before TICK-0090. The secondary
+-- one may hold any bar, so it keeps its parts.
+H.test("with no bar index or shownBarIndex on the client, only the main container is hidden (TICK-0090)", function()
+	local w = H.world()
+	MakeFrames(w)
+	local second = w:Frame("SecondaryStatusTrackingBarContainer")
+	local rep = w:Frame(nil, second)
+	table.insert(second.__h.children, rep)
+	second.BarFrameTexture = w:Frame(nil, second)
+	w.env.HUDiniDB = { hideBlizzardXP = true }
+	w:loadAddon()
+	H.eq(State(w), "SSSH", "no bar index: the main container is hidden")
+	H.eq(Box(second), "S", "and the secondary one is not")
+
+	w.env.StatusTrackingBarInfo = { BarsEnum = BARS }
+	w.ns.HUDini:ApplyBlizzardFrames()
+	H.eq(State(w), "SSSH", "a bar index but no shownBarIndex: the main container is hidden")
+	H.eq(Box(second), "S", "and the secondary one is not")
+end)

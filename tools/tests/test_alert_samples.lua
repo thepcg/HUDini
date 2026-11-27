@@ -88,7 +88,8 @@ H.test("your buff's sample sits after the keep-up sample, left of the bar", func
 	end
 	for _, f in ipairs(Icons(w)) do
 		local point, to = f:GetPoint(1)
-		if point == "RIGHT" and to == keepUp then own = f end
+		-- A hidden icon (the tank buff's, TICK-0208) takes no place: shown only.
+		if point == "RIGHT" and to == keepUp and f:IsShown() then own = f end
 	end
 	H.ok(keepUp ~= nil and keepUp:IsShown(), "the keep-up sample by the health bar")
 	H.ok(own ~= nil and own:IsShown(), "your buff's sample after it")

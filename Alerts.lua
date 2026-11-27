@@ -41,10 +41,12 @@
 	   someone else, on your bars or not. Reading their buffs needs their
 	   names, which combat hides, so in a fight it stays away.
 
-	7. Your buff is off, for every class. A long buff you keep up (/hud buffs)
-	   with none of it on you shows left of your health bar, in and out of
-	   combat. Auras.lua picks it (ns.missingBuffID). In a fight the keep-up
-	   icon (2) can show too, next to the bar; this one moves out past it.
+	7. Your buff is off, for every class. Each long buff you keep up
+	   (/hud buffs) with none of it on you shows its own icon left of your
+	   health bar, side by side, in and out of combat (TICK-0252), and so
+	   does a weapon buff a bare weapon needs. Auras.lua picks them
+	   (ns.missingBuffIDs, ns.missingWeaponID). In a fight the keep-up icon
+	   (2) can show too, next to the bar; these move out past it.
 
 	The sides (D-027): left of a health bar is what is missing, to cast or
 	fix (2, 5, 6, 7). Right of your health bar is for the debuffs on you.
@@ -55,10 +57,10 @@
 	   ns.RACIALS (Classes.lua). The debuff type must be plain: a type the
 	   game hides in a fight lights nothing. No icon on the HUD, no glow.
 
-	9. Your cooldown is ready (TICK-0157, GitHub #1). A spell you turned on
-	   (Classes.lua, ns.SetReadyAlert) plays a sound when its cooldown ends,
-	   and its icon on the HUD glows for a few seconds. Off for every spell
-	   until you turn it on. Only SPELL_UPDATE_COOLDOWN (or, for a spell with
+	9. Your cooldown is ready (TICK-0157, GitHub #1; D-048). A spell can
+	   play its own sound when its cooldown ends, and its icon on the HUD
+	   can glow, each on its own switch (Classes.lua, ns.SetCooldownSound,
+	   ns.SetCooldownGlow). Off for every spell until you turn it on. Only SPELL_UPDATE_COOLDOWN (or, for a spell with
 	   charges, SPELL_UPDATE_CHARGES) can mark a spell "on cooldown": the
 	   game says isOnGCD is only true to trust in that event, and the global
 	   cooldown alone is not the spell's cooldown. While a watched spell is
@@ -286,6 +288,120 @@ local function CreateAlertIcon(parent, edgeColor)
 end
 
 --------------------------------------------------------------------------------
+-- The class alert sounds (TICK-0234, D-051)
+--
+-- The interrupt outline, the dispel tint (a sound for each debuff type) and
+-- the purgeable icons each play their own sound once, as the alert starts
+-- showing, not at each update. Saved per class (ns.ClassDB()) as a sound
+-- choice (Sounds.lua): false or nothing saved is off, the start for each.
+-- ns.CLASS_ALERT_SOUNDS lists them with the sound a picker turns on, for
+-- the Alerts page (designer's TICK-0233); ns.ClassAlertSounds() gives the
+-- ones your class has. The buff missing sound is keepUpSound above. Each
+-- dispel type and the purge have a voice of their own (TICK-0244). A saved
+-- choice keeps its key; only true (the alert's own sound) and a picker
+-- turned on from off take the sound here.
+--------------------------------------------------------------------------------
+
+ns.CLASS_ALERT_SOUNDS = {
+	{ setting = "soundInterrupt", sound = "voiceKick",    alert = "interrupt" },
+	{ setting = "soundMagic",     sound = "voiceMagic",   alert = "dispel", dispel = "Magic" },
+	{ setting = "soundCurse",     sound = "voiceCurse",   alert = "dispel", dispel = "Curse" },
+	{ setting = "soundPoison",    sound = "voicePoison",  alert = "dispel", dispel = "Poison" },
+	{ setting = "soundDisease",   sound = "voiceDisease", alert = "dispel", dispel = "Disease" },
+	-- sound: below, from your class file.
+	{ setting = "soundPurge",                             alert = "purge" },
+}
+
+-- The purge's sound follows what your purge takes: voiceEnrage for an
+-- enrage-only purge (a Hunter's Tranquilizing Shot, TICK-0217), else
+-- voicePurge. Read at each look, so every reader of a.sound (this file and
+-- the Options rows) gets your class's.
+for _, a in ipairs(ns.CLASS_ALERT_SOUNDS) do
+	if a.alert == "purge" then
+		setmetatable(a, { __index = function(_, k)
+			if k ~= "sound" then return nil end
+			local purge = ns.ClassValue("purge")
+			if type(purge) == "table" and purge.enrage and not purge.stealable then
+				return "voiceEnrage"
+			end
+			return "voicePurge"
+		end })
+	end
+end
+
+-- The weapon buff sound (TICK-0250), beside the list, not in it: the
+-- weapon buff icon (Auras.lua) has no spell pick and shows out of a fight
+-- only, so it gets no row from the Alerts page's loop over the list; its
+-- row is the designer's (TICK-0251). It plays once as the icon starts to
+-- show (Auras.lua ns.SyncWeaponBuffSound). Read and set it as one of the
+-- list: ns.GetClassAlertSound and ns.SetClassAlertSound with its setting.
+ns.WEAPON_BUFF_SOUND = { setting = "soundWeaponBuff", sound = "voiceBuff", alert = "weaponBuff" }
+
+local alertSound, dispelSetting = {}, {}
+for _, a in ipairs(ns.CLASS_ALERT_SOUNDS) do
+	alertSound[a.setting] = a
+	if a.dispel then dispelSetting[a.dispel] = a.setting end
+end
+alertSound[ns.WEAPON_BUFF_SOUND.setting] = ns.WEAPON_BUFF_SOUND
+
+-- The entries of ns.CLASS_ALERT_SOUNDS your class file has an alert for
+-- (its interrupt, each dispel type, its purge), in list order.
+function ns.ClassAlertSounds()
+	local out = {}
+	local dispel = ns.ClassValue("dispel")
+	for _, a in ipairs(ns.CLASS_ALERT_SOUNDS) do
+		local has
+		if a.dispel then
+			has = type(dispel) == "table" and dispel[a.dispel] ~= nil
+		else
+			has = ns.ClassValue(a.alert) ~= nil
+		end
+		if has then out[#out + 1] = a end
+	end
+	return out
+end
+
+-- The saved value (a choice; a key or true read as ns.SoundChoice does), or
+-- false for off.
+function ns.GetClassAlertSound(setting)
+	if not (HUDiniDB and alertSound[setting]) then return false end
+	local saved = ns.ClassDB()[setting]
+	if saved == nil then return false end
+	return saved
+end
+
+-- A choice, a key (at the volume it has now), true (the alert's own
+-- sound), or false, nil or "off". True if it changed. Off saves nothing; a
+-- key not in the list changes nothing.
+function ns.SetClassAlertSound(setting, value)
+	if not (HUDiniDB and alertSound[setting]) then return false end
+	if value == nil or value == "off" then value = false end
+	if type(value) == "table" then
+		value = ns.NewSoundChoice(value.key, value.volume)
+	elseif type(value) == "string" then
+		local now = ns.SoundChoice(ns.GetClassAlertSound(setting), alertSound[setting].sound)
+		value = ns.NewSoundChoice(value, now and now.volume)
+	elseif type(value) ~= "boolean" then
+		return false
+	end
+	if value == nil then return false end
+	if ns.SameSound(ns.GetClassAlertSound(setting), value) then return false end
+	ns.ClassDB()[setting] = value or nil
+	return true
+end
+
+local function AlertSoundOn(setting)
+	return setting ~= nil and alertSound[setting] ~= nil
+		and ns.SoundChoice(ns.GetClassAlertSound(setting), alertSound[setting].sound) ~= nil
+end
+
+-- What played (Sounds.lua), or nil.
+local function PlayAlertSound(setting)
+	if not AlertSoundOn(setting) then return nil end
+	return ns.PlaySoundChoice(ns.GetClassAlertSound(setting), alertSound[setting].sound)
+end
+
+--------------------------------------------------------------------------------
 -- 1. Interrupt: a pulsing outline around the target cast bar, which rides
 --    on the target's power bar (TICK-0126)
 --------------------------------------------------------------------------------
@@ -340,6 +456,12 @@ end
 -- only to hand on again (ns.NoteGlobalCooldowns); never read.
 local targetCast
 
+-- True once the interrupt sound played for the target's cast (TICK-0234).
+-- Only the cast's end or a new target clears it, so an outline that hides
+-- and comes back in one cast (not enough energy or rage for a moment, the
+-- wrong stance) plays nothing again.
+local kickHeard = false
+
 -- Called by Bars.lua every time the target cast bar refreshes.
 -- notInterruptible is secret, so it is never read, only handed to the edges.
 function ns.OnTargetCast(notInterruptible, ended)
@@ -347,6 +469,7 @@ function ns.OnTargetCast(notInterruptible, ended)
 	local db = HUDiniDB
 	local outline = KickOutline(ns.casts.targetcast.holder)
 	targetCast = not ended and { ni = notInterruptible } or nil
+	if ended then kickHeard = false end
 
 	if ended or not db.glowOnKickable or not ReadyInterrupt() then
 		outline.pulse:Stop()
@@ -364,6 +487,24 @@ function ns.OnTargetCast(notInterruptible, ended)
 	end
 	outline:Show()
 	if not outline.pulse:IsPlaying() then outline.pulse:Play() end
+	-- The sound (TICK-0234): once per cast, the first time the outline shows
+	-- for it. Not for a cast the game plainly says you cannot interrupt, and
+	-- not for a target you plainly cannot attack (a friend who mounts). A
+	-- secret answer cannot be read, so then it plays: for any cast your
+	-- interrupt is ready for, a shielded one too (the edges stay clear for
+	-- that one). It counts as heard only when it played, so a cast that
+	-- becomes interruptible, or a sound turned on in the cast, plays then.
+	if not kickHeard and Plain(notInterruptible) ~= true
+		and Plain(UnitCanAttack("player", "target")) ~= false then
+		kickHeard = PlayAlertSound("soundInterrupt") ~= nil
+	end
+end
+
+-- A new target: its cast plays the sound again. Bars.lua refreshes the cast
+-- bar on the same event, maybe before this; then the sound comes at the
+-- next refresh of the cast bar (a few times a second, Core.lua Tick).
+local function NewKickTarget()
+	kickHeard = false
 end
 
 --------------------------------------------------------------------------------
@@ -379,16 +520,25 @@ local function FirstKnown(names)
 	return nil
 end
 
-local keepUpIcon, ownBuffIcon
+local keepUpIcon, tankBuffIcon
+local ownBuffIcons = {} -- one for each buff off (TICK-0252), made as needed
 
 -- Left of your health bar, what is missing (D-027),
 -- growing left from the bar in this order. Each icon sits left of the last
 -- shown one before it, so a hidden icon takes no place. A missing item
--- (TICK-0182) shows out of a fight only, after the buffs. No bait goes last:
--- its words sit left of its icon, with no icon past them. In a fight the
--- game's buff watches (Auras.lua, TICK-0168) hold the first spots, in the
--- same order: these icons start left of them.
-local LEFT_ORDER = { "keepUp", "ownBuff", "item", "bait" }
+-- (TICK-0182) shows out of a fight only, after the buffs and your pet
+-- (TICK-0192). Ammo (TICK-0193)
+-- and No bait have words left of their icon: the next icon sits left of the
+-- words. In a fight the game's buff watches (Auras.lua, TICK-0168) hold the
+-- first spots, in the same order: these icons start left of them.
+-- Your buffs off (TICK-0252) take one key each, each its own icon. The
+-- first keeps the old key, so the glow and the tests still find it.
+local OWN_KEYS = { "ownBuff", "ownBuff2", "ownBuff3", "ownBuff4",
+	"ownBuff5", "ownBuff6", "ownBuff7", "ownBuff8" }
+local OWN_MAX = #OWN_KEYS
+local LEFT_ORDER = { "keepUp", "tankBuff" }
+for _, key in ipairs(OWN_KEYS) do LEFT_ORDER[#LEFT_ORDER + 1] = key end
+for _, key in ipairs({ "pet", "item", "ammo", "bait" }) do LEFT_ORDER[#LEFT_ORDER + 1] = key end
 local leftIcons = {}
 ns.leftIcons = leftIcons -- read only: the tests tell the icons apart by it
 
@@ -401,7 +551,10 @@ local function SlotLeft(bar)
 		if icon then
 			icon:ClearAllPoints()
 			icon:SetPoint("RIGHT", after, "LEFT", -3 - (after == bar and skip or 0), 0)
-			if icon:IsShown() then after = icon end
+			if icon:IsShown() then
+				local label = icon.label
+				after = (label and label:IsShown() and (label:GetText() or "") ~= "") and label or icon
+			end
 		end
 	end
 end
@@ -411,67 +564,26 @@ local function Watched(key)
 	return key ~= nil and ns.BuffWatched ~= nil and ns.BuffWatched(key) == true
 end
 
--- The alert sounds the player picks from (D-043, TICK-0167), in menu order:
--- the game's own sound kits (SOUNDKIT, SoundKitConstants.lua), old enough
--- to be in WoW Forever's data. HUDini ships no sound. The cooldown viewer's
--- kits (353392, 353397) are not: PlaySound returns nothing for them there
--- (DK's test, 2026-11-21). The names are the locale's "sound.<key>".
--- The third value is the kit's one sound file (the game's SoundKitEntry
--- table, by wago.tools): the game's buff-end sound takes a file, not a
--- kit (C_UnitAuras.AddAuraSound, Auras.lua, TICK-0168).
-local ALERT_SOUNDS = {
-	{ "readyCheck",   8960, 567478 }, -- READY_CHECK
-	{ "raidWarning",  8959, 567397 }, -- RAID_WARNING
-	{ "mapPing",      3175, 567416 }, -- MAP_PING
-	{ "whisper",      3081, 567421 }, -- TELL_MESSAGE
-	{ "bossEmote",   12197, 567394 }, -- RAID_BOSS_EMOTE_WARNING
-	{ "alarmClock",  12867, 567399 }, -- ALARM_CLOCK_WARNING_2
-	{ "pvpQueue",     8459, 568011 }, -- PVP_THROUGH_QUEUE
-	{ "coins",         120, 567428 }, -- LOOT_WINDOW_COIN_SOUND
-}
-local soundKit, soundFile, soundKeys = {}, {}, {}
-for i, s in ipairs(ALERT_SOUNDS) do
-	soundKeys[i], soundKit[s[1]], soundFile[s[1]] = s[1], s[2], s[3]
-end
--- Two defaults that differ, so good news and a warning are told apart.
-ns.READY_SOUND_DEFAULT   = "readyCheck"
-ns.MISSING_SOUND_DEFAULT = "raidWarning"
--- DK heard it play on WoW Forever: the last try when a pick will not play.
-local LAST_SOUND = 8959
+-- The alert sounds, their saved shape (a sound and its volume) and the
+-- one play function are in Sounds.lua (TICK-0232, D-051): ns.SoundKeys,
+-- ns.SoundChoice, ns.PlaySoundChoice, ns.SoundFile, and the two defaults.
 
--- The keys in menu order (a copy).
-function ns.AlertSounds()
-	local keys = {}
-	for i, key in ipairs(soundKeys) do keys[i] = key end
-	return keys
-end
-
--- Plays key's sound once on the Master channel, so it plays with Sound
--- Effects turned down. If the client cannot play it, then default's, then
--- LAST_SOUND. The kit ID played, or nil. The option rows call it once on a
--- pick (a preview), so it never skips a call.
-function ns.PlayAlertSound(key, default)
-	local kits, added = {}, {}
-	for _, kit in ipairs({ soundKit[key] or false, soundKit[default] or false, LAST_SOUND }) do
-		if kit and not added[kit] then
-			added[kit] = true
-			kits[#kits + 1] = kit
-		end
-	end
-	return ns.PlaySoundFirst(kits, "Master") -- locale: skip the game's sound channel
-end
-
--- The ready alert's sound, one for every spell of the class: the saved key,
--- or the default when none is saved or the key left the list.
+-- The class's cooldown sound (the old Bell sound pick): the saved key, or
+-- the default when none is saved or the key left the list. Every ready
+-- alert played it before each spell had its own sound (D-048). Classes.lua
+-- reads readySound itself (ClassSoundKey): at each login for a sound of
+-- true, and for a spell the class file starts on with nothing saved
+-- (TICK-0203 review). The Bell sound row was the only caller of these two;
+-- the cooldown grid has no such row.
 function ns.GetReadySound()
 	local key = HUDiniDB and ns.ClassDB().readySound
-	if soundKit[key] then return key end
+	if ns.IsSoundKey(key) then return key end
 	return ns.READY_SOUND_DEFAULT
 end
 
 -- True if it changed. A key not in the list changes nothing.
 function ns.SetReadySound(key)
-	if not (HUDiniDB and soundKit[key]) then return false end
+	if not (HUDiniDB and ns.IsSoundKey(key)) then return false end
 	local db = ns.ClassDB()
 	local want = key ~= ns.READY_SOUND_DEFAULT and key or nil
 	if db.readySound == want then return false end
@@ -488,14 +600,18 @@ end
 -- A buff that leaves you in a fight while the game plays its own sound for
 -- it (ns.GameSounds, Auras.lua, TICK-0168) gets none from HUDini: one
 -- sound, not two.
-local missingOn = { keepUp = false, ownBuff = false }
+local missingOn = { keepUp = false, ownBuff = false, tankBuff = false }
 local missingSounded = false
 
--- Saved per class as keepUpSound: false off, true on with the default
--- (TICK-0163 saves), a key on with that sound. Nothing saved: on with the
+-- Saved per class as keepUpSound: false off, true on with the default at
+-- full volume (TICK-0163 saves), a sound choice (Sounds.lua) on with that
+-- sound and volume. A bare key from before TICK-0232 becomes a choice at
+-- login (ns.MigrateSounds); it still reads as that key at full volume. Nothing saved: on with the
 -- default when the class file says keepUpSoundOn (D-047), else off. Off
 -- saves false, so it wins over that start (TICK-0181). No migration: an
 -- Off from before TICK-0181 saved nothing, so it reads as the start.
+-- Going off keeps the choice in keepUpSoundLast: a key picked while off
+-- takes its volume.
 local function KeepUpSaved()
 	local saved = ns.ClassDB().keepUpSound
 	if saved == nil and ns.ClassDefault and ns.ClassDefault("keepUpSoundOn") == true then
@@ -507,20 +623,26 @@ end
 function ns.GetKeepUpSound()
 	if not HUDiniDB then return false end
 	local saved = KeepUpSaved()
-	return saved == true or type(saved) == "string"
+	return saved == true or type(saved) == "string" or type(saved) == "table"
+end
+
+-- The sound that plays as a choice (a new table: key and volume), or false
+-- when off. A key that left the list plays the default.
+function ns.GetKeepUpSoundValue()
+	if not ns.GetKeepUpSound() then return false end
+	return ns.SoundChoice(KeepUpSaved(), ns.MISSING_SOUND_DEFAULT) or false
 end
 
 -- "off", or the key of the sound that plays (the default for true or for a
 -- key that left the list).
 function ns.GetKeepUpSoundChoice()
-	if not ns.GetKeepUpSound() then return "off" end
-	local saved = KeepUpSaved()
-	if soundKit[saved] then return saved end
-	return ns.MISSING_SOUND_DEFAULT
+	local c = ns.GetKeepUpSoundValue()
+	return c and c.key or "off"
 end
 
--- true (on, the sound kept), false or "off", or a key. True if it changed;
--- a key not in the list changes nothing.
+-- true (on, the sound kept), false or "off", a key (at the volume it has
+-- now, or had when turned off), or a choice. True if it changed; a key not in the list changes
+-- nothing.
 function ns.SetKeepUpSound(choice)
 	if not HUDiniDB then return false end
 	local db = ns.ClassDB()
@@ -529,12 +651,18 @@ function ns.SetKeepUpSound(choice)
 		want = ns.GetKeepUpSound() and KeepUpSaved() or true
 	elseif choice == false or choice == nil or choice == "off" then
 		want = false
-	elseif soundKit[choice] then
-		want = choice ~= ns.MISSING_SOUND_DEFAULT and choice or true
+		local now = ns.GetKeepUpSoundValue()
+		if now then db.keepUpSoundLast = now end
 	else
-		return false
+		local now = ns.GetKeepUpSoundValue()
+		if not now then now = ns.SoundChoice(db.keepUpSoundLast, ns.MISSING_SOUND_DEFAULT) end
+		local c = type(choice) == "table" and ns.NewSoundChoice(choice.key, choice.volume)
+			or ns.NewSoundChoice(choice, now and now.volume)
+		if not c then return false end
+		-- The default at full volume saves as true, as before TICK-0232.
+		want = (c.key == ns.MISSING_SOUND_DEFAULT and c.volume == 100) or c
 	end
-	if db.keepUpSound == want then return false end
+	if ns.SameSound(db.keepUpSound, want) then return false end
 	db.keepUpSound = want
 	-- The game's sound for a buff that ends in a fight follows now, not at
 	-- the next aura change: a fight can start first (TICK-0168).
@@ -545,20 +673,108 @@ end
 -- The sound file the game plays when a buff leaves you in a fight, or nil
 -- with the sound off.
 function ns.MissingSoundFile()
-	if not ns.GetKeepUpSound() then return nil end
-	return soundFile[ns.GetKeepUpSoundChoice()] or soundFile[ns.MISSING_SOUND_DEFAULT]
+	return ns.SoundFile(ns.GetKeepUpSoundValue(), ns.MISSING_SOUND_DEFAULT)
+end
+
+-- The buff missing repeat (TICK-0234): saved per class as keepUpRepeat,
+-- off at the start. While a red icon shows in a fight and the buff missing
+-- sound is on, the sound plays again, REPEAT_QUIET seconds after the last
+-- play ended (DK, TICK-0249), the first time after the first sound. It
+-- stops when the last red icon goes: the buff is back (read, or cast:
+-- Auras.lua OnCast), the fight ended, or the alert is off.
+-- In a form whose buffs make no sound (TICK-0197) MissingSound counts the
+-- alert as off, so the repeat stops there too.
+-- In a fight the game can play the first sound itself (ns.GameSounds): the
+-- repeat is HUDini's own, so it still runs, from that same moment. A buff
+-- that ends in a fight where HUDini cannot see it (only the game's watch
+-- shows its icon, Auras.lua) turns no icon of this file on: no repeat. A
+-- cast HUDini cannot read (a secret spell ID) does not end it either: it
+-- runs to the fight's end.
+-- So a buff that loses its last charge in a fight (Lightning Shield, Inner
+-- Fire) gets the game's one sound and no repeat: in a fight your auras are
+-- closed to addons, and nothing tells HUDini it went (TICK-0249). The
+-- Cooldown Manager's buff list does (Auras.lua ViewerSays): with the buff
+-- tracked there, and the list shown, its end turns the icon on here.
+-- The pace: no sound API gives a length. Every HUDini voice file, the
+-- quieter copies too, is at most VOICE_LONG seconds (ffprobe, Media/Sounds:
+-- the longest is 1.15 s; TICK-0244's FadingSoon and Enrage copies 1.49 s);
+-- a game sound counts as GAME_SOUND_LONG, most of the list is shorter.
+local REPEAT_QUIET, VOICE_LONG, GAME_SOUND_LONG = 2, 1.5, 2
+local missingRepeat
+
+-- Seconds from one play's start to the next.
+local function RepeatEvery()
+	local c = ns.SoundChoice(ns.GetKeepUpSoundValue(), ns.MISSING_SOUND_DEFAULT)
+	local voice = c and type(c.key) == "string" and c.key:sub(1, 5) == "voice" -- locale: skip a key prefix
+	return (voice and VOICE_LONG or GAME_SOUND_LONG) + REPEAT_QUIET
+end
+
+function ns.GetKeepUpRepeat()
+	return (HUDiniDB and ns.ClassDB().keepUpRepeat == true) and true or false
+end
+
+local function RepeatWanted()
+	return missingSounded and not samples and ns.GetKeepUpSound() and ns.GetKeepUpRepeat()
+end
+
+-- A ticker's pace is fixed: a new sound with another length gets a new one.
+local function SyncRepeat()
+	local want = RepeatWanted() and true or false
+	local every = want and RepeatEvery()
+	if missingRepeat and want and missingRepeat.every ~= every then
+		missingRepeat:Set(false)
+		missingRepeat = nil
+	end
+	if not missingRepeat and want then
+		missingRepeat = ns.Ticker(every, function()
+			if not RepeatWanted() then
+				missingRepeat:Set(false)
+				return
+			end
+			ns.PlaySoundChoice(ns.GetKeepUpSoundValue(), ns.MISSING_SOUND_DEFAULT)
+		end)
+		missingRepeat.every = every
+	end
+	if missingRepeat then missingRepeat:Set(want) end
+end
+
+-- True if it changed. Off saves nothing.
+function ns.SetKeepUpRepeat(on)
+	if not HUDiniDB then return false end
+	local want = on and true or false
+	if ns.GetKeepUpRepeat() == want then return false end
+	ns.ClassDB().keepUpRepeat = want or nil
+	SyncRepeat()
+	return true
 end
 
 -- buff: the buff the icon shows (a buff name, or ns.KEEP_UP_KEY for the
 -- list), for ns.GameSounds.
+-- TICK-0197: in a form whose buffs make no sound (Auras.lua), none plays;
+-- leave the form with the buff off in a fight and it plays then.
+-- buff can be a list of them (your buffs off, TICK-0252): the game plays
+-- the sound only when it plays one for each. false in the list is a buff
+-- whose name did not read: the game's sound for it is not known.
+local function ByGame(buff)
+	if buff == nil or ns.GameSounds == nil then return false end
+	if type(buff) ~= "table" then return ns.GameSounds(buff) and true or false end
+	if buff[1] == nil then return false end
+	for _, name in ipairs(buff) do
+		if type(name) ~= "string" or not ns.GameSounds(name) then return false end
+	end
+	return true
+end
+
 local function MissingSound(key, on, buff)
+	if on and ns.FormSoundQuiet and ns.FormSoundQuiet() then on = false end
 	missingOn[key] = on and true or false
-	local any = missingOn.keepUp or missingOn.ownBuff
-	local byGame = on and buff ~= nil and ns.GameSounds ~= nil and ns.GameSounds(buff)
+	local any = missingOn.keepUp or missingOn.ownBuff or missingOn.tankBuff
+	local byGame = on and ByGame(buff)
 	if any and not missingSounded and ns.GetKeepUpSound() and not byGame then
-		ns.PlayAlertSound(ns.GetKeepUpSoundChoice(), ns.MISSING_SOUND_DEFAULT)
+		ns.PlaySoundChoice(ns.GetKeepUpSoundValue(), ns.MISSING_SOUND_DEFAULT)
 	end
 	missingSounded = any
+	SyncRepeat()
 end
 
 local function KeepUpIcon(bar)
@@ -571,20 +787,43 @@ local function KeepUpIcon(bar)
 	return keepUpIcon
 end
 
--- True when the own-buff icon (alert 7) shows a spell of the keep-up list.
+-- The own-buff icons' spells (alert 7), in order: your buffs off, then the
+-- weapon buff (TICK-0252), and how many of them are your buffs. Empty with
+-- the alert off. At most OWN_MAX, one for each icon, so the icons, the
+-- keep-up step aside (OwnBuffCovers) and the sound read the same list
+-- (TICK-0255). The weapon buff keeps the last place: its sound (Auras.lua
+-- ns.SyncWeaponBuffSound) plays as its icon shows, so it always has one.
+local function OwnBuffList()
+	local db, list = HUDiniDB, {}
+	if not (db.warnOwnBuff and db.showHealth) then return list, 0 end
+	local weapon = ns.missingWeaponID
+	for _, id in ipairs(ns.missingBuffIDs or {}) do
+		if #list >= OWN_MAX then break end
+		list[#list + 1] = id
+		-- Only a kept entry stands for the weapon buff: one past the cap
+		-- has no icon (TICK-0255 review).
+		if id == weapon then weapon = nil end
+	end
+	if weapon and #list >= OWN_MAX then list[#list] = nil end
+	local learned = #list
+	if weapon then list[#list + 1] = weapon end
+	return list, learned
+end
+
+-- True when an own-buff icon (alert 7) shows a spell of the keep-up list.
 -- The same buff can be both: a class pick of Lightning Shield, a buff
 -- HUDini learned too (TICK-0166). One icon is enough, and the own-buff
 -- icon knows more in a fight (the slot sign, TICK-0164), so it wins.
 local function OwnBuffCovers(keepUp)
-	local db = HUDiniDB
-	local id = db.warnOwnBuff and db.showHealth and ns.missingBuffID
-	if not id then return false end
-	local name = Plain(C_Spell.GetSpellName(id))
-	if type(name) ~= "string" then return false end
+	local listed = {}
 	for _, spell in ipairs(keepUp) do
-		local listed = spell
-		if type(spell) == "number" then listed = Plain(C_Spell.GetSpellName(spell)) end
-		if listed == name then return true end
+		local name = spell
+		if type(spell) == "number" then name = Plain(C_Spell.GetSpellName(spell)) end
+		if type(name) == "string" then listed[name] = true end
+	end
+	for _, id in ipairs((OwnBuffList())) do
+		local name = Plain(C_Spell.GetSpellName(id))
+		if type(name) == "string" and listed[name] then return true end
 	end
 	return false
 end
@@ -608,6 +847,8 @@ local function UpdateKeepUpIcon()
 		and off
 		and InCombat()
 		and not OwnBuffCovers(keepUp)
+		-- TICK-0197: no buff is missing in a form that cannot cast one.
+		and not (ns.FormQuiet and ns.FormQuiet())
 
 	if want then
 		local h = bar:GetHeight()
@@ -621,18 +862,75 @@ local function UpdateKeepUpIcon()
 end
 
 --------------------------------------------------------------------------------
--- 7. Your buff is off: the one to cast, left of your health bar
+-- 2c. The tank buff (TICK-0208): Righteous Fury off while you tank
 --
--- Auras.lua decides which (ns.missingBuffID) and calls this whenever it
--- looks again, in and out of combat.
+-- The class file's tankBuff. In a fight, its icon shows left of your
+-- health bar when Auras.lua says the buff is off while a with buff (Seal
+-- of Fury) is on: ns.TankBuffMissing. Saved per class as tankBuffOn:
+-- false is off; nothing saved is on. Not as tankBuff: ns.ClassValue reads a
+-- saved key of the class file's name as the player's override of it.
 --------------------------------------------------------------------------------
 
-local function OwnBuffIcon(bar)
-	if not ownBuffIcon then
-		ownBuffIcon = CreateAlertIcon(bar, MISSING_COLOR)
-		leftIcons.ownBuff = ownBuffIcon
+function ns.GetTankBuff()
+	if not HUDiniDB then return false end
+	return ns.ClassDB().tankBuffOn ~= false
+end
+
+-- True if it changed.
+function ns.SetTankBuff(on)
+	if not HUDiniDB then return false end
+	local want = on and true or false
+	if ns.GetTankBuff() == want then return false end
+	ns.ClassDB().tankBuffOn = want
+	if ns.UpdateAlerts then ns.UpdateAlerts() end
+	return true
+end
+
+local function TankBuffIcon(bar)
+	if not tankBuffIcon then
+		-- Dimmed, with a red edge, as the keep-up icon.
+		tankBuffIcon = CreateAlertIcon(bar, MISSING_COLOR)
+		tankBuffIcon.tex:SetVertexColor(0.65, 0.65, 0.65)
+		leftIcons.tankBuff = tankBuffIcon
 	end
-	return ownBuffIcon
+	return tankBuffIcon
+end
+
+local function UpdateTankBuffIcon()
+	local db  = HUDiniDB
+	local bar = ns.GetBar("health")
+	TankBuffIcon(bar)
+	-- Asked out of a fight too, so HUDini sees the buffs before a fight
+	-- hides them (Auras.lua).
+	local spellID = ns.TankBuffMissing and ns.TankBuffMissing() or nil
+	local want = spellID ~= nil and db.showHealth and ns.GetTankBuff() and InCombat()
+	if want then
+		local h = bar:GetHeight()
+		tankBuffIcon:SetSize(h, h)
+		tankBuffIcon.tex:SetTexture(C_Spell.GetSpellTexture(spellID) or 134400)
+	end
+	tankBuffIcon:SetShown((want and bar:IsShown()) and true or false)
+	SlotLeft(bar)
+	MissingSound("tankBuff", want)
+end
+
+--------------------------------------------------------------------------------
+-- 7. Your buff is off: the ones to cast, left of your health bar
+--
+-- Auras.lua decides which (ns.missingBuffIDs, ns.missingWeaponID) and calls
+-- this whenever it looks again, in and out of combat. Each buff off has its
+-- own icon, side by side (TICK-0252), up to OWN_MAX.
+--------------------------------------------------------------------------------
+
+local function OwnBuffIcon(bar, i)
+	i = i or 1
+	local icon = ownBuffIcons[i]
+	if not icon then
+		icon = CreateAlertIcon(bar, MISSING_COLOR)
+		ownBuffIcons[i] = icon
+		leftIcons[OWN_KEYS[i]] = icon
+	end
+	return icon
 end
 
 local function UpdateOwnBuffIcon()
@@ -640,35 +938,51 @@ local function UpdateOwnBuffIcon()
 	local db = HUDiniDB
 	if not db then return end
 	local bar = ns.GetBar("health")
-	OwnBuffIcon(bar)
+	OwnBuffIcon(bar, 1)
 
-	local spellID = db.warnOwnBuff and db.showHealth and ns.missingBuffID or nil
-	if spellID then
-		local h = bar:GetHeight()
-		ownBuffIcon:SetSize(h, h)
-		ownBuffIcon.tex:SetTexture(C_Spell.GetSpellTexture(spellID) or 134400)
+	local list, learned = OwnBuffList()
+	local h = bar:GetHeight()
+	local names = {}
+	for i = 1, OWN_MAX do
+		local spellID = list[i]
+		if spellID or ownBuffIcons[i] then
+			local icon = OwnBuffIcon(bar, i)
+			local buff = spellID and Plain(C_Spell.GetSpellName(spellID))
+			if type(buff) ~= "string" then buff = nil end
+			if spellID then
+				icon:SetSize(h, h)
+				icon.tex:SetTexture(C_Spell.GetSpellTexture(spellID) or 134400)
+				if i <= learned then names[#names + 1] = buff or false end
+			end
+			-- A watch shows it in a fight: one icon. The sound and the glow
+			-- still count it.
+			icon:SetShown(spellID ~= nil and not Watched(buff))
+		end
+		-- The HUD icon of each spell glows while it is off (D-035,
+		-- TICK-0150), with the proc glow setting off too. Auras.lua gives
+		-- the grid entry's own spell ID when the spell is on the grid
+		-- (UpdateBuffMissing), so the glow finds its icon by that ID. A
+		-- spell off the grid has no icon: nothing glows.
+		if ns.HUDini and ns.HUDini.SetAlertGlow then ns.HUDini:SetAlertGlow(OWN_KEYS[i], spellID) end
 	end
-	local buff = spellID and Plain(C_Spell.GetSpellName(spellID))
-	if type(buff) ~= "string" then buff = nil end
-	-- A watch shows it in a fight: one icon. The sound and the glow still
-	-- count it.
-	ownBuffIcon:SetShown(spellID ~= nil and not Watched(buff))
 	SlotLeft(bar)
-	-- The icon shows out of a fight too; the sound is for a fight only.
-	MissingSound("ownBuff", spellID ~= nil and InCombat(), buff)
-	-- The HUD icon of that spell glows while this shows (D-035, TICK-0150),
-	-- with the proc glow setting off too. ns.missingBuffID is the grid
-	-- entry's own spell ID when the spell is on the grid (Auras.lua
-	-- UpdateBuffMissing), so the glow finds its icon by that ID. A spell off
-	-- the grid has no icon: nothing glows.
-	if ns.HUDini and ns.HUDini.SetAlertGlow then ns.HUDini:SetAlertGlow("ownBuff", spellID) end
+	-- The icons show out of a fight too; the sound is for a fight only, and
+	-- for a learned buff only: a weapon buff's ID, left from out of a
+	-- fight, is still here when PLAYER_REGEN_DISABLED reaches this file
+	-- before Auras.lua clears it (TICK-0198). It plays once for them all.
+	MissingSound("ownBuff", learned > 0 and InCombat(), names)
 end
 
--- Auras.lua calls this when ns.missingBuffID may have changed: the
+-- Auras.lua calls this when ns.missingBuffIDs may have changed: the
 -- keep-up icon looks again too, as it steps aside for the same spell.
 ns.UpdateOwnBuffIcon = function()
 	UpdateOwnBuffIcon()
-	if HUDiniDB and not samples then UpdateKeepUpIcon() end
+	if HUDiniDB and not samples then
+		UpdateKeepUpIcon()
+		UpdateTankBuffIcon()
+		-- A sacrifice buff can land after UNIT_PET (TICK-0192).
+		if ns.UpdatePetAlert then ns.UpdatePetAlert() end
+	end
 end
 
 --------------------------------------------------------------------------------
@@ -728,8 +1042,10 @@ end
 -- choice is on and you know its spell: make (the spell that makes it), or
 -- one of needs (spells that use it). The icon shows the first such row, in
 -- class file order, whose items your bags hold none of and whose buff (if
--- it has one) is not on you. A count or a buff the game will not give
--- counts as "you have it", so an unreadable bag never raises a false alarm.
+-- it has one) is not on you. A row with few = N (TICK-0207) shows under N,
+-- all its items added and its buff counted as one, with the bag count on
+-- the icon. A count or a buff the game will not give counts as "you have
+-- it", so an unreadable bag never raises a false alarm.
 -- Bags: BAG_UPDATE_DELAYED. Spells, the fight's start and end, and auras
 -- call ns.UpdateAlerts.
 --------------------------------------------------------------------------------
@@ -740,6 +1056,10 @@ local function ItemIcon(bar)
 	if not itemIcon then
 		itemIcon = CreateAlertIcon(bar, MISSING_COLOR)
 		leftIcons.item = itemIcon
+		-- The bag count of a row with few (TICK-0207), as the grid's stacks.
+		itemIcon.count = itemIcon:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
+		itemIcon.count:SetPoint("BOTTOMRIGHT", -1, 2)
+		itemIcon.count:SetJustifyH("RIGHT")
 	end
 	return itemIcon
 end
@@ -763,13 +1083,23 @@ local function ItemCount(id)
 	return type(n) == "number" and n or nil
 end
 
--- true when the bags hold one of the row's items, or the game will not say.
-local function HasItem(row)
+-- How many of the row's items your bags hold, all its IDs added, or nil
+-- when the game will not say for one of them.
+local function RowCount(row)
+	local total = 0
 	for _, id in ipairs(row.items) do
 		local n = ItemCount(id)
-		if n == nil or n > 0 then return true end
+		if n == nil then return nil end
+		total = total + n
 	end
-	return false
+	return total
+end
+
+-- The least the row wants: its few (TICK-0207), else 1. strict: 1 always.
+local function RowLeast(row, strict)
+	local few = row.few
+	if not strict and type(few) == "number" and few > 1 then return few end
+	return 1
 end
 
 -- true when the buff is on you, or the game will not say. Asked out of a
@@ -783,19 +1113,32 @@ local function BuffOn(name)
 	return aura ~= nil
 end
 
--- The row to show now and its known spell's ID, or nil. Out of a fight,
--- with the health bar on. makeOnly: only a row you make (for the wake).
--- Makes no table: the HUD's poll asks it through ns.MissingItemWake.
+-- The row to show now, its known spell's ID and the bag count, or nil.
+-- Out of a fight, with the health bar on. Two passes: first the first row
+-- with none in your bags, then the first row under its few, so a row with
+-- a few left never hides a later row at none (TICK-0223: 2 Soul Shards and
+-- no Healthstone show the Healthstone). makeOnly: only a row you make, and
+-- only with none in your bags (for the wake: a few left does not wake the
+-- HUD), so one pass. Makes no table: the HUD's poll asks it through
+-- ns.MissingItemWake.
 local function MissingRow(makeOnly)
 	local db = HUDiniDB
 	if not (db and db.showHealth) or InCombat() then return nil end
 	local list = ns.ClassDefault and ns.ClassDefault("missingItem")
 	if type(list) ~= "table" then return nil end
-	for _, row in ipairs(list) do
-		if (not makeOnly or (type(row) == "table" and row.make ~= nil))
-			and ns.MissingItemOn(row) then
-			local id = RowKnown(row)
-			if id and not HasItem(row) and not BuffOn(row.buff) then return row, id end
+	for pass = 1, makeOnly and 1 or 2 do
+		for _, row in ipairs(list) do
+			if (not makeOnly or (type(row) == "table" and row.make ~= nil))
+				and ns.MissingItemOn(row) then
+				local id = RowKnown(row)
+				local n = id and RowCount(row)
+				if n then
+					local least = RowLeast(row, pass == 1)
+					if n < least and not (n + 1 >= least and BuffOn(row.buff)) then
+						return row, id, n
+					end
+				end
+			end
 		end
 	end
 	return nil
@@ -833,12 +1176,13 @@ local function UpdateItemIcon()
 	if samples or not HUDiniDB then return end
 	local bar = ns.GetBar("health")
 	ItemIcon(bar)
-	local row, id = MissingRow(false)
+	local row, id, n = MissingRow(false)
 	if row then
 		local h = bar:GetHeight()
 		itemIcon:SetSize(h, h)
 		itemIcon.tex:SetTexture(RowTexture(row, id))
 	end
+	itemIcon.count:SetText((row and n > 0 and RowLeast(row) > 1) and tostring(n) or "")
 	itemIcon:SetShown((row and bar:IsShown()) and true or false)
 	SlotLeft(bar)
 end
@@ -866,6 +1210,402 @@ itemEvents:SetScript("OnEvent", function(self, event)
 		end
 	end
 	UpdateItemIcon()
+end)
+
+--------------------------------------------------------------------------------
+-- 2d. Ammo: low or none, left of the health bar (TICK-0193, D-047)
+--
+-- With a bow, gun or crossbow: "Low ammo" with the ammo's icon and count
+-- while you carry under LOW_AMMO, out of a fight only; "No ammo" with a red
+-- edge at 0 or with no ammo in the ammo slot, in and out of a fight. On
+-- for Hunters; any class may turn it on (a Warrior or Rogue pulls with
+-- Shoot). "Low ammo" is for a Hunter only: another class carries less than
+-- LOW_AMMO, so it would always be on; it gets "No ammo" only (TICK-0236).
+-- Either one wakes the hidden HUD for AMMO_WAKE_TIME (Core.lua,
+-- ns.AmmoWake), not until you buy ammo: a low-level Hunter is always low.
+-- The choice is per class: HUDiniDB.classes[token].warnAmmo, nil for the
+-- class's start.
+-- On this client the ammo slot (0) holds the equipped ammo, and its count
+-- is all of that ammo you carry. A count the game will not give (an error,
+-- a secret value in a fight) shows nothing: no false alarm.
+-- Bags: BAG_UPDATE_DELAYED; the ammo slot: UNIT_INVENTORY_CHANGED; the
+-- ranged slot, the fight's start and end: ns.UpdateAlerts.
+--------------------------------------------------------------------------------
+
+local LOW_AMMO   = 200                       -- veto open: the number
+local AMMO_SLOT  = _G.INVSLOT_AMMO or 0
+local AMMO_ICON  = 132382                    -- an arrow, for "No ammo"
+local LOW_COLOR  = { 1, 0.7, 0.1, 1 }        -- amber: soon, not now
+-- Bow 2, gun 3, crossbow 18 (Enum.ItemWeaponSubclass). Thrown and wands
+-- use no ammo.
+local AMMO_WEAPONS = { [2] = true, [3] = true, [18] = true }
+local RANGED_SLOTS = { _G.INVSLOT_RANGED or 18, _G.INVSLOT_MAINHAND or 16 }
+
+-- On for your class: your saved choice, else on for a Hunter only.
+function ns.GetAmmoWarn()
+	if not HUDiniDB then return false end
+	local saved = ns.ClassDB().warnAmmo
+	if saved ~= nil then return saved == true end
+	return ns.ClassToken() == "HUNTER"
+end
+
+local UpdateAmmoIcon
+
+-- Turn the ammo alert on or off for your class. True if it changed. The
+-- icon looks again at once.
+function ns.SetAmmoWarn(on)
+	if not HUDiniDB then return false end
+	on = on and true or false
+	if ns.GetAmmoWarn() == on then return false end
+	ns.ClassDB().warnAmmo = on
+	UpdateAmmoIcon()
+	return true
+end
+
+-- True with a bow, gun or crossbow in the ranged slot (or the main hand).
+local function UsesAmmo()
+	local info = C_Item and C_Item.GetItemInfoInstant or GetItemInfoInstant
+	if not info then return false end
+	for _, slot in ipairs(RANGED_SLOTS) do
+		local ok, id = pcall(GetInventoryItemID, "player", slot)
+		id = ok and Plain(id) or nil
+		if type(id) == "number" then
+			local okInfo, _, _, _, _, _, classID, subID = pcall(info, id)
+			if okInfo and Plain(classID) == Enum.ItemClass.Weapon and AMMO_WEAPONS[Plain(subID)] then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+-- How much ammo you carry and its item ID: 0 with an empty ammo slot; nil
+-- when the game will not say. The slot's count, or the bags' count of
+-- that item if it is more. A 0 from one source while the other will not
+-- say is no answer: no false "No ammo".
+local function AmmoCount()
+	local okID, id = pcall(GetInventoryItemID, "player", AMMO_SLOT)
+	if not okID or IsSecret(id) then return nil end
+	if id == nil then return 0 end
+	local okN, n = pcall(_G.GetInventoryItemCount, "player", AMMO_SLOT)
+	n = okN and Plain(n) or nil
+	if type(n) ~= "number" then n = nil end
+	local bags = ItemCount(id)
+	if n == nil and bags == nil then return nil end
+	if (n == nil or bags == nil) and (n or bags) == 0 then return nil end
+	return math.max(n or 0, bags or 0), id
+end
+
+-- "no", "low" (out of a fight only) or nil; then the count and the ammo's ID.
+local function AmmoState()
+	local db = HUDiniDB
+	if not (db and db.showHealth and ns.GetAmmoWarn() and UsesAmmo()) then return nil end
+	local n, id = AmmoCount()
+	if n == nil then return nil end
+	if n <= 0 then return "no", 0 end
+	if n < LOW_AMMO and not InCombat() and ns.ClassToken() == "HUNTER" then return "low", n, id end
+	return nil
+end
+ns.AmmoState = AmmoState
+
+-- The wake (TICK-0236): AMMO_WAKE_TIME seconds from the moment the state
+-- starts or changes, and from each fight's start and end (UpdateAlerts
+-- looks again then). So an idle HUD still hides while you are low, and a
+-- slot read that is wrong costs a short wake, not the hide. Never while
+-- you are dead or a ghost.
+local AMMO_WAKE_TIME = 10                    -- veto open: the seconds
+local ammoKey, ammoSince
+
+function ns.AmmoWake()
+	if not ammoSince or GetTime() - ammoSince >= AMMO_WAKE_TIME then return false end
+	if Plain(UnitIsDeadOrGhost("player")) ~= false then return false end
+	return AmmoState() ~= nil
+end
+
+local ammoIcon
+
+local function AmmoIcon(bar)
+	if not ammoIcon then
+		ammoIcon = CreateAlertIcon(bar, MISSING_COLOR)
+		leftIcons.ammo = ammoIcon
+		ammoIcon.count = ammoIcon:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
+		ammoIcon.count:SetPoint("BOTTOMRIGHT", -1, 2)
+		ammoIcon.count:SetJustifyH("RIGHT")
+		ammoIcon.label = ammoIcon:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+		ammoIcon.label:SetPoint("RIGHT", ammoIcon, "LEFT", -4, 0)
+	end
+	return ammoIcon
+end
+
+-- One look: low (amber edge, the ammo's icon, its count) or none (red).
+local function PaintAmmo(icon, bar, low, n, id)
+	local h = bar:GetHeight()
+	icon:SetSize(h, h)
+	icon.edge:SetColorTexture(unpack(low and LOW_COLOR or MISSING_COLOR))
+	local tex
+	if low and id then
+		local ok, got = pcall(_G.GetInventoryItemTexture, "player", AMMO_SLOT)
+		tex = ok and Plain(got) or nil
+	end
+	icon.tex:SetTexture(tex or AMMO_ICON)
+	icon.count:SetText(low and tostring(n) or "")
+	icon.label:SetText(ns.Text(low and "alerts.lowAmmo" or "alerts.noAmmo"))
+	if low then icon.label:SetTextColor(1, 0.7, 0.1) else icon.label:SetTextColor(1, 0.25, 0.2) end
+end
+
+UpdateAmmoIcon = function()
+	if samples or not HUDiniDB then return end
+	local bar = ns.GetBar("health")
+	AmmoIcon(bar)
+	local state, n, id = AmmoState()
+	if state then PaintAmmo(ammoIcon, bar, state == "low", n, id) end
+	local key = state and (state .. (InCombat() and "+" or "")) or nil
+	if key ~= ammoKey then
+		ammoKey = key
+		if key then ammoSince = GetTime() end
+	end
+	ammoIcon:SetShown((state and bar:IsShown()) and true or false)
+	SlotLeft(bar)
+end
+ns.UpdateAmmo = UpdateAmmoIcon
+
+-- Bags and the ammo slot are heard from the first PLAYER_ENTERING_WORLD on,
+-- as for the missing item: not on the login screen.
+local ammoEvents = CreateFrame("Frame")
+pcall(ammoEvents.RegisterEvent, ammoEvents, "PLAYER_ENTERING_WORLD")
+ammoEvents:SetScript("OnEvent", function(self, event)
+	if event == "PLAYER_ENTERING_WORLD" then
+		pcall(self.RegisterEvent, self, "BAG_UPDATE_DELAYED")
+		pcall(self.RegisterUnitEvent, self, "UNIT_INVENTORY_CHANGED", "player")
+	end
+	UpdateAmmoIcon()
+end)
+
+--------------------------------------------------------------------------------
+-- 2e. Your pet needs you (TICK-0192, D-047), left of the health bar
+--
+-- The class file's pet field (Classes.lua): the Hunter and the Warlock.
+-- One icon with a red edge, the spell to cast, for the first of these:
+--   revive: out of a fight, your pet is dead. A dead pet reads as dead
+--     while its corpse is there (UnitIsDead("pet")). After the corpse goes,
+--     no API tells a dead pet from a dismissed one, so a pet HUDini saw die
+--     counts as dead until a live pet is out (this session only). In a
+--     fight a dead pet shows nothing: Call Pet cannot call it.
+--   feed: out of a fight, your Hunter pet is unhappy:
+--     C_PetInfo.GetPetHappiness() is 1 (2 content, 3 happy).
+--   call: no pet is out, in or out of a fight. The spell of the list you
+--     cast last (saved per class as petLast), else the first you know.
+-- Each one needs its spell known. No icon while you are dead, mounted or
+-- on a taxi, or while a sacrifice buff is on you: Demonic Sacrifice kills
+-- the demon for a buff, so no demon is then your choice. Your auras hide in
+-- a fight, so a fight keeps the sacrifice answer from before it. A value
+-- the game will not give shows no icon. Saved per class as petOn: false is
+-- off, nothing saved is on. Not as pet: ns.ClassValue reads a saved key of
+-- the class file's name as the player's override of it. It never wakes the
+-- HUD.
+--------------------------------------------------------------------------------
+
+local petIcon
+local petSawDead    = false -- the pet out died, and no live pet came out since
+local petSacrificed = false -- a sacrifice buff on you, as read out of a fight
+
+function ns.GetPetAlert()
+	if not HUDiniDB then return false end
+	return ns.ClassDB().petOn ~= false
+end
+
+-- True if it changed.
+function ns.SetPetAlert(on)
+	if not HUDiniDB then return false end
+	local want = on and true or false
+	if ns.GetPetAlert() == want then return false end
+	ns.ClassDB().petOn = want
+	if ns.UpdateAlerts then ns.UpdateAlerts() end
+	return true
+end
+
+-- The class file's pet field, or nil.
+local function PetData()
+	local p = ns.ClassDefault and ns.ClassDefault("pet")
+	return type(p) == "table" and p or nil
+end
+ns.PetAlertData = PetData
+
+local function PetIcon(bar)
+	if not petIcon then
+		petIcon = CreateAlertIcon(bar, MISSING_COLOR)
+		leftIcons.pet = petIcon
+	end
+	return petIcon
+end
+
+-- True when the game plainly says no, or has no such API (no IsMounted: not
+-- mounted). An error or a secret is not a no.
+local function SaysNo(fn, ...)
+	if not fn then return true end
+	local ok, v = pcall(fn, ...)
+	if not ok or IsSecret(v) then return false end
+	return not v
+end
+
+-- The plain answer of a unit API, or nil on an error or a secret.
+local function Ask(fn, ...)
+	if not fn then return nil end
+	local ok, v = pcall(fn, ...)
+	if not ok then return nil end
+	return Plain(v)
+end
+
+-- Your Hunter pet's mood: 1 unhappy, 2 content, 3 happy. nil for a demon,
+-- no pet, or an answer the game will not give.
+local function Happiness()
+	if not _G.HasPetUI then return nil end
+	local ok, hasUI, isHunterPet = pcall(_G.HasPetUI)
+	if not (ok and Plain(hasUI) and Plain(isHunterPet)) then return nil end
+	local petInfo = _G.C_PetInfo
+	local get = (petInfo and petInfo.GetPetHappiness) or _G.GetPetHappiness
+	local n = Ask(get)
+	return type(n) == "number" and n or nil
+end
+
+-- Out of a fight: true when a buff of the list is on you, nil when the game
+-- will not say. Your auras can be hidden out of a fight too (PvP, some
+-- maps): then a buff is not found by name, and not found is "will not say",
+-- as in Auras.lua FindAura.
+local function SacrificeOn(list)
+	if type(list) ~= "table" then return false end
+	local auras = C_UnitAuras
+	if not (auras and auras.GetAuraDataBySpellName) then return nil end
+	for _, name in ipairs(list) do
+		local ok, aura = pcall(auras.GetAuraDataBySpellName, "player", name, "HELPFUL")
+		if not ok or IsSecret(aura) then return nil end
+		if aura ~= nil then return true end
+	end
+	if ns.AurasHidden and ns.AurasHidden() then return nil end
+	return false
+end
+
+-- The call spell's ID: the one of the list you cast last, while you know
+-- it, else the first you know. A single name: that spell.
+local function CallSpell(call)
+	if type(call) ~= "table" then return call ~= nil and Known(call) or nil end
+	local last = HUDiniDB and ns.ClassDB().petLast
+	if type(last) == "string" then
+		for _, spell in ipairs(call) do
+			if spell == last then
+				local id = Known(spell)
+				if id then return id end
+			end
+		end
+	end
+	return FirstKnown(call)
+end
+
+-- A spell you cast: when it is one of the call list, save it as the one
+-- to show. Its name as the class file gives it. True if it was one.
+local function RememberSummon(spellID)
+	local data = PetData()
+	local id = Plain(spellID)
+	if not (HUDiniDB and data and type(data.call) == "table" and type(id) == "number") then
+		return false
+	end
+	for _, spell in ipairs(data.call) do
+		if ns.SpellID(spell) == id then
+			ns.ClassDB().petLast = spell
+			return true
+		end
+	end
+	return false
+end
+
+-- What your pet needs now, and the spell's ID: "revive", "feed" or "call";
+-- or nil. It keeps what it learns: the pet seen dead, and the sacrifice
+-- buff out of a fight.
+local function PetNeed()
+	local db = HUDiniDB
+	if not (db and db.showHealth) or not ns.GetPetAlert() then return nil end
+	local data = PetData()
+	if not data then return nil end
+	local fight = InCombat()
+	if not fight then
+		local on = SacrificeOn(data.sacrifice)
+		if on ~= nil then petSacrificed = on end
+	end
+	local out = Ask(UnitExists, "pet")
+	if out == nil then return nil end
+	local dead = false
+	if out then
+		dead = Ask(UnitIsDead, "pet")
+		if dead == nil then return nil end
+		petSawDead = dead and true or false
+	end
+	if not (SaysNo(UnitIsDeadOrGhost, "player") and SaysNo(_G.IsMounted)
+		and SaysNo(_G.UnitOnTaxi, "player")) then
+		return nil
+	end
+	if out and not dead then
+		if fight or data.feed == nil or Happiness() ~= 1 then return nil end
+		local id = Known(data.feed)
+		if id then return "feed", id end
+		return nil
+	end
+	if (dead or petSawDead) and data.revive ~= nil then
+		if fight then return nil end
+		local id = Known(data.revive)
+		if id then return "revive", id end
+		return nil
+	end
+	-- The demon you gave up: no summon, whether or not it still reads as a
+	-- dead pet.
+	if petSacrificed then return nil end
+	local id = CallSpell(data.call)
+	if id then return "call", id end
+	return nil
+end
+
+local function UpdatePetIcon()
+	if samples or not HUDiniDB then return end
+	local bar = ns.GetBar("health")
+	PetIcon(bar)
+	local need, id = PetNeed()
+	if need then
+		local h = bar:GetHeight()
+		petIcon:SetSize(h, h)
+		petIcon.tex:SetTexture(C_Spell.GetSpellTexture(id) or 134400)
+	end
+	petIcon.need = need -- read by the tests and /hud debug aura
+	petIcon:SetShown((need and bar:IsShown()) and true or false)
+	SlotLeft(bar)
+end
+ns.UpdatePetAlert = UpdatePetIcon
+
+-- From the first PLAYER_ENTERING_WORLD on, as the ammo. UNIT_PET is a pet
+-- coming or going; UNIT_HEALTH and UNIT_FLAGS on the pet its death;
+-- UNIT_HAPPINESS and PET_UI_UPDATE its mood. A mount, a taxi and your own
+-- death hide the icon. Only this icon looks again: UNIT_HEALTH comes often
+-- in a fight. A cast looks again only when it is a call spell.
+local petEvents = CreateFrame("Frame")
+pcall(petEvents.RegisterEvent, petEvents, "PLAYER_ENTERING_WORLD")
+petEvents:SetScript("OnEvent", function(self, event, _, _, spellID)
+	if event == "PLAYER_ENTERING_WORLD" then
+		pcall(self.RegisterUnitEvent, self, "UNIT_PET", "player")
+		pcall(self.RegisterUnitEvent, self, "UNIT_HEALTH", "pet")
+		pcall(self.RegisterUnitEvent, self, "UNIT_FLAGS", "pet")
+		pcall(self.RegisterEvent, self, "UNIT_HAPPINESS")
+		pcall(self.RegisterEvent, self, "PET_UI_UPDATE")
+		pcall(self.RegisterEvent, self, "PLAYER_MOUNT_DISPLAY_CHANGED")
+		pcall(self.RegisterEvent, self, "PLAYER_CONTROL_LOST")
+		pcall(self.RegisterEvent, self, "PLAYER_CONTROL_GAINED")
+		pcall(self.RegisterEvent, self, "PLAYER_DEAD")
+		pcall(self.RegisterEvent, self, "PLAYER_ALIVE")
+		pcall(self.RegisterEvent, self, "PLAYER_UNGHOST")
+		pcall(self.RegisterUnitEvent, self, "UNIT_SPELLCAST_SUCCEEDED", "player")
+	elseif not PetData() then
+		return -- No pet line in your class file: no icon to update.
+	elseif event == "UNIT_SPELLCAST_SUCCEEDED" then
+		if not RememberSummon(spellID) then return end
+	end
+	UpdatePetIcon()
 end)
 
 --------------------------------------------------------------------------------
@@ -905,14 +1645,20 @@ local function KnownDispels()
 	return known, count, one
 end
 
--- Sets ns.powerTint. Bars.lua lays it over the power colour.
-local function UpdateDispelTint()
+-- The type of a dispellable debuff the game will not name, on a class that
+-- removes more than one type.
+local UNKNOWN_TYPE = "?" -- locale: skip a key, never shown
+-- The order an unknown type picks its sound in.
+local DISPEL_ORDER = { "Magic", "Curse", "Poison", "Disease" } -- locale: skip the game's type names
+
+-- The tint, the type it shows (UNKNOWN_TYPE when hidden), and the types you
+-- can remove; nil when none shows.
+local function DispelTint()
 	local db = HUDiniDB
-	ns.powerTint = nil
-	if not (db.warnDispel and db.showPower) then return end
+	if not (db.warnDispel and db.showPower) then return nil end
 
 	local known, count, one = KnownDispels()
-	if count == 0 then return end
+	if count == 0 then return nil end
 
 	local hidden = false
 	for i = 1, 40 do
@@ -922,8 +1668,7 @@ local function UpdateDispelTint()
 		if Readable(aura) then
 			local dispelType = Plain(aura.dispelName)
 			if dispelType and known[dispelType] then
-				ns.powerTint = TypeColor(dispelType)
-				return
+				return TypeColor(dispelType), dispelType, known
 			end
 		else
 			-- There is one, but the game will not say what type.
@@ -932,8 +1677,44 @@ local function UpdateDispelTint()
 	end
 
 	if hidden then
-		ns.powerTint = (count == 1) and TypeColor(one) or DISPEL_UNKNOWN
+		if count == 1 then return TypeColor(one), one, known end
+		return DISPEL_UNKNOWN, UNKNOWN_TYPE, known
 	end
+	return nil
+end
+
+-- The type the tint showed at the last look, or nil.
+local dispelShown
+
+-- The sound (TICK-0234): once as the tint comes up, and again when it
+-- changes to another named type. A change between a named type and the
+-- unknown one is the same debuff read another way (a fight hides its type,
+-- or shows it again): no sound. An unknown type plays the first type's
+-- sound that is on, in DISPEL_ORDER, of the types you can remove (the
+-- RAID filter lists only those).
+local function DispelSound(shown, known)
+	local was = dispelShown
+	dispelShown = shown
+	if not shown or was == shown then return end
+	if was and (was == UNKNOWN_TYPE or shown == UNKNOWN_TYPE) then return end
+	if shown ~= UNKNOWN_TYPE then
+		PlayAlertSound(dispelSetting[shown])
+		return
+	end
+	for _, dispelType in ipairs(DISPEL_ORDER) do
+		local setting = dispelSetting[dispelType]
+		if known[dispelType] and AlertSoundOn(setting) then
+			PlayAlertSound(setting)
+			return
+		end
+	end
+end
+
+-- Sets ns.powerTint. Bars.lua lays it over the power colour.
+local function UpdateDispelTint()
+	local tint, shown, known = DispelTint()
+	ns.powerTint = tint
+	DispelSound(shown, known)
 end
 
 --------------------------------------------------------------------------------
@@ -1067,6 +1848,8 @@ end
 local MAX_PURGE_ICONS = 4
 
 local purgeIcons = {}
+-- An icon showed at the last look, and the target's GUID then (when plain).
+local purgeShown, purgeTarget = false, nil
 
 local function PurgeIcon(bar, index)
 	local icon = purgeIcons[index]
@@ -1082,19 +1865,57 @@ local function PurgeIcon(bar, index)
 	return icon
 end
 
--- Your purge spell and what it takes: any magic buff, or (Spellsteal) only
--- stealable ones. The class file gives "Purge" or { spell = ..., stealable = true }.
+-- Your purge spell and what it takes: any magic buff, (Spellsteal) only
+-- stealable ones, or (Tranquilizing Shot, TICK-0217) only an Enrage. The
+-- class file gives "Purge", { spell = ..., stealable = true } or
+-- { spell = ..., enrage = true }. kind is "magic", "stealable" or "enrage".
 local function PurgeRule()
 	local purge = ns.ClassValue("purge")
-	local spell, stealableOnly = purge, false
+	local spell, kind = purge, "magic"
 	if type(purge) == "table" then
-		spell, stealableOnly = purge.spell, purge.stealable and true or false
+		spell = purge.spell
+		kind = (purge.stealable and "stealable") or (purge.enrage and "enrage") or "magic"
 	end
-	return Known(spell), stealableOnly
+	return Known(spell), kind
 end
 
-local function Purgeable(aura, stealableOnly)
-	if stealableOnly then return Plain(aura.isStealable) == true end
+-- Only the auras someone in your group can remove, "helpful enrages on
+-- enemies" among them (AuraUtil.AuraFilters.RaidPlayerDispellable,
+-- Blizzard_FrameXMLUtil/AuraUtil.lua, wow-ui-source forever). The game
+-- picks them in its own code, so it picks them in a fight too, when the
+-- aura itself is hidden.
+local ENRAGE_FILTER = "HELPFUL|RAID_PLAYER_DISPELLABLE"
+
+-- In a group: party1 is there in a party, raid1 in a raid. An answer the
+-- game hides counts as there: the group rule is the quiet one.
+local function Exists(unit)
+	local there = UnitExists(unit)
+	if IsSecret(there) then return true end
+	return there == true
+end
+
+local function InGroup()
+	return Exists("party1") or Exists("raid1")
+end
+
+-- An aura from ENRAGE_FILTER that you take with an enrage-only purge.
+-- The game gives an Enrage no debuff type name; the empty name is how it
+-- reads, "Enrage" in case a later client names it. Alone, the list should
+-- hold only what you can remove, and your only removal is the Enrage: a
+-- hidden aura counts blind, and a readable one unless it plainly names
+-- another type (in case the game's list holds more than its comment says).
+-- In a group it also holds what the others remove (a priest's magic buffs),
+-- so only an aura that plainly names an Enrage counts.
+local function Enrage(aura, alone)
+	if not Readable(aura) then return alone end
+	local kind = Plain(aura.dispelName)
+	if kind == "" or kind == "Enrage" then return true end -- locale: skip the game's type name
+	return alone and type(kind) ~= "string"
+end
+
+local function Purgeable(aura, kind)
+	if not Readable(aura) then return false end
+	if kind == "stealable" then return Plain(aura.isStealable) == true end
 	return Plain(aura.dispelName) == "Magic"
 end
 
@@ -1105,15 +1926,20 @@ local function UpdatePurgeable()
 
 	local hostile = UnitExists("target") and Plain(UnitCanAttack("player", "target"))
 	if db.showPurgeable and db.showTargetHealth and hostile then
-		local spellID, stealableOnly = PurgeRule()
+		local spellID, kind = PurgeRule()
 		if spellID then
+			local enrage = kind == "enrage"
+			local alone = enrage and not InGroup()
 			for i = 1, 40 do
-				local ok, aura = AuraAt("target", i, "HELPFUL")
+				local ok, aura = AuraAt("target", i, enrage and ENRAGE_FILTER or "HELPFUL")
 				if not ok or aura == nil then break end
-				if Readable(aura) and Purgeable(aura, stealableOnly) then
+				if enrage and Enrage(aura, alone) or not enrage and Purgeable(aura, kind) then
 					shown = shown + 1
 					local icon = PurgeIcon(bar, shown)
-					icon.tex:SetTexture(Plain(aura.icon) or 134400)
+					-- A hidden aura is never opened: your purge's icon instead.
+					local texture = Readable(aura) and Plain(aura.icon)
+						or enrage and Plain(C_Spell.GetSpellTexture(spellID))
+					icon.tex:SetTexture(texture or 134400)
 					icon:Show()
 					if shown >= MAX_PURGE_ICONS then break end
 				end
@@ -1124,6 +1950,17 @@ local function UpdatePurgeable()
 	for i = shown + 1, #purgeIcons do
 		purgeIcons[i]:Hide()
 	end
+
+	-- The sound (TICK-0234): once as the first icon comes up, and again for
+	-- a new target with one. A target whose GUID the game hides counts as
+	-- the same one.
+	local guid = shown > 0 and Plain(UnitGUID("target")) or nil
+	if shown > 0 and (not purgeShown or (guid ~= nil and purgeTarget ~= nil and guid ~= purgeTarget)) then
+		PlayAlertSound("soundPurge")
+	end
+	purgeShown = shown > 0
+	-- A hidden GUID keeps the last plain one: A, hidden, then C plays for C.
+	if shown == 0 then purgeTarget = nil elseif guid ~= nil then purgeTarget = guid end
 end
 
 --------------------------------------------------------------------------------
@@ -1277,6 +2114,8 @@ end)
 
 local SAMPLE_TEXTURES = {
 	keepUp     = "Interface\\Icons\\Ability_Warrior_BattleShout",
+	tankBuff   = "Interface\\Icons\\Spell_Holy_SealOfFury",            -- Righteous Fury
+	pet        = "Interface\\Icons\\Ability_Hunter_BeastSoothe",       -- Revive Pet
 	ownBuff    = "Interface\\Icons\\Spell_Holy_MagicalSentry",      -- Arcane Intellect
 	targetBuff = "Interface\\Icons\\Spell_Nature_Regeneration",     -- Mark of the Wild
 	purge      = { "Interface\\Icons\\Spell_Holy_PowerWordShield", "Interface\\Icons\\Spell_Holy_Renew" },
@@ -1300,10 +2139,24 @@ local function ShowSamples(db)
 	local health = ns.GetBar("health")
 	local own = OwnBuffIcon(health)
 	own:Hide()
+	for i = 2, #ownBuffIcons do ownBuffIcons[i]:Hide() end
 	if db.warnOwnBuff and db.showHealth then SampleIcon(own, health, SAMPLE_TEXTURES.ownBuff) end
 	local keepUp = KeepUpIcon(health)
 	keepUp:Hide()
 	if db.warnKeepUp and db.showHealth then SampleIcon(keepUp, health, SAMPLE_TEXTURES.keepUp) end
+	-- Only when you know the class file's tank buff: its row shows then
+	-- (TICK-0208).
+	local tank = TankBuffIcon(health)
+	tank:Hide()
+	if ns.TankBuffSpell and ns.TankBuffSpell() and ns.GetTankBuff() and db.showHealth then
+		SampleIcon(tank, health, SAMPLE_TEXTURES.tankBuff)
+	end
+	-- Your pet (TICK-0192): for a class file with a pet field, the alert on.
+	local pet = PetIcon(health)
+	pet:Hide()
+	if PetData() and ns.GetPetAlert() and db.showHealth then
+		SampleIcon(pet, health, SAMPLE_TEXTURES.pet)
+	end
 	-- A missing item: your class file's first row that is on (TICK-0182).
 	local item = ItemIcon(health)
 	item:Hide()
@@ -1314,6 +2167,16 @@ local function ShowSamples(db)
 				break
 			end
 		end
+	end
+	-- Low ammo, as it looks with 150 arrows (TICK-0193); for a class other
+	-- than Hunter, No ammo, the only one it gets (TICK-0236).
+	local ammo = AmmoIcon(health)
+	ammo:Hide()
+	if ns.GetAmmoWarn() and db.showHealth then
+		-- true: the ammo you hold gives the icon, as in play; none, the arrow.
+		local low = ns.ClassToken() == "HUNTER"
+		PaintAmmo(ammo, health, low, low and 150 or 0, low)
+		ammo:Show()
 	end
 	local bait = BaitIcon(health)
 	bait:Hide()
@@ -1355,21 +2218,36 @@ function ns.ShowAlertSamples(on)
 	-- the HUD poll, or TestMode.lua's ns.RefreshBars at its end.
 end
 
+-- True while the alert samples are up: for an alert sound kept in another
+-- file (the weapon buff sound, Auras.lua, TICK-0250), so it stays quiet then.
+function ns.AlertSamplesUp() return samples end
+
 --------------------------------------------------------------------------------
 -- 9. Cooldown ready: a sound and a glow when a cooldown you watch ends
 --------------------------------------------------------------------------------
 
--- The sound is the player's pick for the class (ns.GetReadySound, section 2,
--- D-043), default the ready check.
--- Seconds the icon glows. Not until you cast it: a ready spell you keep for
--- later would then hold the HUD awake (ShouldShow) and defeat hide when idle.
+-- Each spell has its own glow and its own sound, each on its own switch
+-- (D-048, TICK-0203; ns.GetCooldownGlow and ns.GetCooldownSound,
+-- Classes.lua). A spell is watched when either is on.
+-- How long the icon glows: in a fight, until you cast the spell or the
+-- fight ends, at most READY_HOLD_MAX; out of a fight, READY_GLOW_TIME. The
+-- cast ends it by its own event (UNIT_SPELLCAST_SUCCEEDED, a plain spell
+-- ID) or by the cooldown's start (CooldownStarted); the cap covers a cast
+-- that both read secret, so a "ready" glow never stays long on a spell
+-- that cools down. The glow wakes the HUD
+-- (ShouldShow) only for READY_GLOW_TIME, so a ready spell you keep for
+-- later never holds an idle HUD awake. A spell already ready when a fight
+-- starts does not glow: no event says so, and at the pull the game may
+-- hide its cooldown.
 local READY_GLOW_TIME = 5
+local READY_HOLD_MAX  = 60
 
 local watchIDs   = {} -- spell ID the game uses now -> name, for each spell you turned on and know
 local baseIDs    = {} -- that ID -> the ID you know, when an override replaces it
 local onCooldown = {} -- spell ID -> GetTime() when an event saw its cooldown start
 local lateStart  = {} -- spell ID -> true when only the look one frame later saw that start
 local readyLit   = {} -- spell ID -> GetTime() when its glow went on
+local litHeld    = {} -- spell ID -> true when it went on in a fight: it holds until a cast or the fight's end
 local litBase    = {} -- spell ID -> the base ID lit with it, while it glows
 
 -- No watched cooldown is this short. A start that only the look one frame
@@ -1478,11 +2356,13 @@ local function OnHUD(id)
 	return false
 end
 
--- True while a ready glow is on a HUD icon: ShouldShow (Core.lua) wakes the
--- HUD. A watched spell with no icon only rings: there is no glow to see.
+-- True while a ready glow in its first READY_GLOW_TIME is on a HUD icon:
+-- ShouldShow (Core.lua) wakes the HUD. A watched spell with no icon only
+-- rings: there is no glow to see.
 function ns.ReadyGlowLit()
-	for id in pairs(readyLit) do
-		if OnHUD(id) then return true end
+	local now = GetTime()
+	for id, since in pairs(readyLit) do
+		if now - since < READY_GLOW_TIME and OnHUD(id) then return true end
 	end
 	return false
 end
@@ -1497,7 +2377,7 @@ end
 
 local function Unlight(id)
 	if not readyLit[id] then return end
-	readyLit[id] = nil
+	readyLit[id], litHeld[id] = nil, nil
 	local base = litBase[id]
 	litBase[id] = nil
 	Glow(id, base, false)
@@ -1507,11 +2387,29 @@ local function Ready(id)
 	local since, late = onCooldown[id], lateStart[id]
 	onCooldown[id], lateStart[id] = nil, nil
 	if late and since and GetTime() - since < MIN_COOLDOWN then return end
-	ns.PlayAlertSound(ns.GetReadySound(), ns.READY_SOUND_DEFAULT)
+	local name = watchIDs[id]
+	local sound = ns.GetCooldownSoundValue(name)
+	if sound then ns.PlaySoundChoice(sound, ns.READY_SOUND_DEFAULT) end
+	if not ns.GetCooldownGlow(name) then return end
 	-- readyLit first: SetAlertGlow asks ShouldShow at once.
 	readyLit[id] = GetTime()
+	litHeld[id] = InCombatLockdown() and true or nil
 	litBase[id] = baseIDs[id]
 	Glow(id, litBase[id], true)
+end
+
+-- The fight ended: every glow it held goes out.
+local function UnlightHeld()
+	for id in pairs(litHeld) do Unlight(id) end
+end
+
+-- You cast a spell (its ID plain): its glow, by either ID, goes out.
+local function UnlightCast(spellID)
+	spellID = Plain(spellID)
+	if type(spellID) ~= "number" then return end
+	for id in pairs(readyLit) do
+		if id == spellID or litBase[id] == spellID then Unlight(id) end
+	end
 end
 
 local readyTicker
@@ -1527,7 +2425,7 @@ readyTicker = ns.Ticker(0.5, function()
 	end
 	local now = GetTime()
 	for id, since in pairs(readyLit) do
-		if now - since >= READY_GLOW_TIME then Unlight(id) end
+		if now - since >= (litHeld[id] and READY_HOLD_MAX or READY_GLOW_TIME) then Unlight(id) end
 	end
 	SetReadyTicker()
 end)
@@ -1578,12 +2476,14 @@ function ns.RefreshReadyAlerts()
 	wipe(lateStart)
 	if HUDiniDB and ns.ClassToken() then
 		-- Your saved choices, and the class file's spells that start on
-		-- (D-047): ns.GetReadyAlert says which are on. One you do not know
-		-- yet makes no sound; SPELLS_CHANGED looks again when you learn it.
-		local names = {}
-		local saved = ns.ClassDB().readyAlerts
-		if type(saved) == "table" then
-			for name in pairs(saved) do names[name] = true end
+		-- (D-047): a spell is watched when its glow or its sound is on
+		-- (ns.GetReadyAlert). One you do not know yet makes no sound;
+		-- SPELLS_CHANGED looks again when you learn it.
+		local names, mine = {}, ns.ClassDB()
+		for _, key in ipairs({ "readyGlow", "readySounds" }) do
+			if type(mine[key]) == "table" then
+				for name in pairs(mine[key]) do names[name] = true end
+			end
 		end
 		local starts = ns.ClassDefault and ns.ClassDefault("readyAlertOn")
 		if type(starts) == "table" then
@@ -1603,7 +2503,7 @@ function ns.RefreshReadyAlerts()
 		end
 	end
 	for id in pairs(readyLit) do
-		if not watchIDs[id] then Unlight(id) end
+		if not (watchIDs[id] and ns.GetCooldownGlow(watchIDs[id])) then Unlight(id) end
 	end
 	SetReadyTicker()
 end
@@ -1631,9 +2531,21 @@ pcall(readyEvents.RegisterEvent, readyEvents, "PLAYER_ENTERING_WORLD")
 pcall(readyEvents.RegisterEvent, readyEvents, "SPELLS_CHANGED")
 pcall(readyEvents.RegisterEvent, readyEvents, "SPELL_UPDATE_COOLDOWN")
 pcall(readyEvents.RegisterEvent, readyEvents, "SPELL_UPDATE_CHARGES")
-readyEvents:SetScript("OnEvent", function(_, event)
+pcall(readyEvents.RegisterEvent, readyEvents, "PLAYER_REGEN_ENABLED")
+pcall(readyEvents.RegisterUnitEvent, readyEvents, "UNIT_SPELLCAST_SUCCEEDED", "player")
+readyEvents:SetScript("OnEvent", function(_, event, _, _, spellID)
 	if event == "PLAYER_ENTERING_WORLD" or event == "SPELLS_CHANGED" then
 		ns.RefreshReadyAlerts()
+		return
+	end
+	if event == "PLAYER_REGEN_ENABLED" then
+		UnlightHeld()
+		SetReadyTicker()
+		return
+	end
+	if event == "UNIT_SPELLCAST_SUCCEEDED" then
+		UnlightCast(spellID)
+		SetReadyTicker()
 		return
 	end
 	if OverrideMoved() then ns.RefreshReadyAlerts() end
@@ -1652,11 +2564,14 @@ function ns.UpdateAlerts()
 	if not HUDiniDB or samples then return end
 	UpdateOwnBuffIcon()
 	UpdateKeepUpIcon()
+	UpdateTankBuffIcon()
 	UpdateDispelTint()
 	UpdateRacialGlow()
 	UpdatePurgeable()
 	UpdateTargetBuffIcon()
+	UpdatePetIcon()
 	UpdateItemIcon()
+	UpdateAmmoIcon()
 	UpdateBaitIcon()
 	baitTicker:Set(BaitWanted())
 	targetTicker:Set(TargetTickerWanted())
@@ -1714,7 +2629,8 @@ function ns.ReportAlerts(out)
 		local spell = row.make or (type(row.needs) == "table" and table.concat(row.needs, ", ")) or row.needs
 		out("    " .. row.key .. ": " .. (row.make and "make " or "needs ") .. tostring(spell)
 			.. ", known " .. Mark(RowKnown(row)) .. ", on " .. Mark(ns.MissingItemOn(row))
-			.. (row.buff and (", buff " .. tostring(row.buff) .. " on " .. Mark(BuffOn(row.buff))) or ""))
+			.. (row.buff and (", buff " .. tostring(row.buff) .. " on " .. Mark(BuffOn(row.buff))) or "")
+			.. (RowLeast(row) > 1 and (", few " .. RowLeast(row)) or ""))
 		for _, id in ipairs(row.items) do
 			local name
 			local get = C_Item and C_Item.GetItemNameByID
@@ -1730,6 +2646,38 @@ function ns.ReportAlerts(out)
 		end
 	end
 	out("  Missing item icon now                 " .. Mark(itemIcon and itemIcon:IsShown()))
+	-- Your pet (TICK-0192): what the game says, so a test proves the reads.
+	local pet = PetData()
+	if pet then
+		local function Answer(fn, ...)
+			if not fn then return "no such API" end
+			local okPet, v = pcall(fn, ...)
+			if not okPet or IsSecret(v) then return "cannot tell" end
+			return tostring(v)
+		end
+		local petInfo = _G.C_PetInfo
+		local get = (petInfo and petInfo.GetPetHappiness) or _G.GetPetHappiness
+		out("  Pet alert on                          " .. Mark(ns.GetPetAlert())
+			.. ", now " .. tostring(petIcon and petIcon:IsShown() and petIcon.need or "none"))
+		out("    pet out " .. Answer(UnitExists, "pet") .. ", dead " .. Answer(UnitIsDead, "pet")
+			.. ", seen dead " .. tostring(petSawDead) .. ", happiness " .. Answer(get)
+			.. " (1 unhappy), sacrifice buff " .. tostring(petSacrificed))
+		out("    revive " .. Mark(pet.revive and Known(pet.revive)) .. ", feed " .. Mark(pet.feed and Known(pet.feed))
+			.. ", call " .. Mark(CallSpell(pet.call)) .. ", last call " .. tostring(ns.ClassDB().petLast or "none"))
+	end
+	-- Ammo (TICK-0193): what the ammo slot says, so a test proves slot 0.
+	-- "empty" is the game's plain nil; "cannot tell" an error or a secret.
+	local function SlotAnswer(answered, v)
+		if not answered or IsSecret(v) then return "cannot tell" end
+		if v == nil then return "empty" end
+		return tostring(v)
+	end
+	local okAmmo, ammoID = pcall(GetInventoryItemID, "player", AMMO_SLOT)
+	local okCount, ammoN = pcall(_G.GetInventoryItemCount, "player", AMMO_SLOT)
+	out("  Ammo alert on                         " .. Mark(ns.GetAmmoWarn()) .. ", bow, gun or crossbow " .. Mark(UsesAmmo()))
+	out("  Ammo slot                             item " .. SlotAnswer(okAmmo, ammoID)
+		.. ", count " .. SlotAnswer(okCount, ammoN)
+		.. ", alert now " .. tostring(AmmoState() or "none"))
 	-- locale: end
 end
 
@@ -1752,7 +2700,10 @@ events:SetScript("OnEvent", function(self, event)
 		-- is not proven on Forever, so DUEL_FINISHED covers the end too.
 		pcall(self.RegisterUnitEvent, self, "UNIT_FACTION", "target")
 		pcall(self.RegisterEvent, self, "DUEL_FINISHED")
+		-- You join or leave a group: the enrage purge's alone rule changes.
+		pcall(self.RegisterEvent, self, "GROUP_ROSTER_UPDATE")
 	end
+	if event == "PLAYER_TARGET_CHANGED" then NewKickTarget() end
 	if event == "PLAYER_REGEN_DISABLED" then
 		-- The lockdown starts just after this event: look again next frame,
 		-- so the keep-up icon sees the fight.

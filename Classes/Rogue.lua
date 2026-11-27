@@ -34,18 +34,30 @@ ns.RegisterClass("ROGUE", {
 	-- others start off. Your own choice wins once you save one.
 	readyAlertOn = { "Evasion", "Vanish" },
 	-- Missing items (TICK-0182): an icon by your health bar, out of a
-	-- fight, when the bags hold no powder. Vanish fails with no Flash
-	-- Powder, and it is the button that saves a Rogue's life, so that row
-	-- starts on. Blind is used less, and a Rogue who never casts it would
-	-- see the icon all day, so that row starts off. Both are "needs" rows:
-	-- the powder is bought, not made, so they never wake the HUD.
-	-- Item IDs: Classic Era (Flash Powder 5140, Blinding Powder 5530), not
-	-- yet proven on Forever; /hud debug aura names each one with its count.
+	-- fight, when the bags hold none of a row's items. The first row that
+	-- is missing shows.
+	-- Flash Powder: Vanish fails without it, and Vanish is the button that
+	-- saves a Rogue's life, so the row starts on. It comes from a vendor:
+	-- a "needs" row, which never wakes the HUD.
+	-- Poison (TICK-0212): each poison spell makes a poison item. One row
+	-- for every rank of all five, so the icon shows only when the bags
+	-- hold no poison at all, whichever ones you use. Starts on.
+	-- Blinding Powder: the Rogue makes it (level 34, from Fadeleaf). Blind
+	-- is used less, and a Rogue who never casts it would see the icon all
+	-- day, so the row starts off.
+	-- Item IDs: Classic Era, not yet proven on Forever; /hud debug aura
+	-- names each one with its count.
 	missingItem = {
-		{ key = "flashPowder",    needs = { "Vanish" }, items = { 5140 }, on = true },
-		{ key = "blindingPowder", needs = { "Blind" },  items = { 5530 }, on = false },
+		{ key = "flashPowder", needs = { "Vanish" }, items = { 5140 }, on = true },
+		{ key = "poison", make = "Instant Poison", on = true, items = {
+			6947, 6949, 6950, 8926, 8927, 8928,  -- Instant Poison I-VI
+			2892, 2893, 8984, 8985, 20844,       -- Deadly Poison I-V
+			3775, 3776,                          -- Crippling Poison I-II
+			5237, 6951, 9186,                    -- Mind-numbing Poison I-III
+			10918, 10920, 10921, 10922,          -- Wound Poison I-IV
+		} },
+		{ key = "blindingPowder", make = "Blinding Powder", items = { 5530 }, on = false },
 	},
-	-- Vanish and Blind are in ids for the rows above.
 	-- locale: skip the game's spell names
 	ids = {
 		["Kick"]                = 1766,   -- ranks at 12/26/42/58
@@ -53,6 +65,7 @@ ns.RegisterClass("ROGUE", {
 		["Evasion"]             = 5277,   -- level 8, 5 min cooldown
 		["Vanish"]              = 1856,   -- level 22, rank 2: 1857 at 42; needs Flash Powder
 		["Blind"]               = 2094,   -- level 34, 5 min cooldown; needs Blinding Powder
+		["Blinding Powder"]     = 6510,   -- level 34; makes 3 from Fadeleaf
 		["Sprint"]              = 2983,   -- level 10, ranks at 10/34/58
 		["Adrenaline Rush"]     = 13750,  -- Combat talent, level 40
 		["Blade Flurry"]        = 13877,  -- Combat talent, level 30

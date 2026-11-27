@@ -187,3 +187,95 @@ H.test("a bag event before login builds no health bar", function()
 	w:fire("BAG_UPDATE_DELAYED")
 	H.ok(asked > 0, "heard after login")
 end)
+
+-- TICK-0207: a row with few = N shows under N, with the bag count on it.
+local function Few(key, n)
+	return function(profile)
+		for _, row in ipairs(profile.missingItem) do
+			if row.key == key then row.few = n end
+		end
+	end
+end
+local function Count(ns) return Icon(ns).count:GetText() end
+
+H.test("few: a Warlock with 2 Soul Shards sees the icon with 2; with 3 it goes", function()
+	local w, ns = World("WARLOCK", { "Summon Voidwalker" }, Few("soulShard", 3))
+	w.bag[6265] = 2
+	w:fire("BAG_UPDATE_DELAYED")
+	H.eq(Shown(ns), true, "2 of 3: shown")
+	H.eq(Icon(ns).tex.file, 1000 + 6265, "the shard's icon")
+	H.eq(Count(ns), "2", "the count on it")
+	w.bag[6265] = 3
+	w:fire("BAG_UPDATE_DELAYED")
+	H.eq(Shown(ns), false, "3: hidden")
+	w.bag[6265] = 0
+	w:fire("BAG_UPDATE_DELAYED")
+	H.eq(Shown(ns), true, "none: shown")
+	H.eq(Count(ns), "", "none: no count, as a row with no few")
+	w.combat = true
+	ns.UpdateAlerts()
+	H.eq(Shown(ns), false, "in a fight: hidden, as every row")
+end)
+
+H.test("few: a row with no few shows no count, and only at none", function()
+	local w, ns = World("MAGE", { "Conjure Mana Gem" })
+	H.eq(Count(ns), "", "no gem: no count")
+	w.bag[5514] = 1
+	w:fire("BAG_UPDATE_DELAYED")
+	H.eq(Shown(ns), false, "one: hidden")
+end)
+
+H.test("few: all the row's items are added, and its buff counts as one", function()
+	local w, ns = World("MAGE", { "Conjure Mana Gem" }, Few("manaGem", 2))
+	w.bag[5514] = 1
+	w:fire("BAG_UPDATE_DELAYED")
+	H.eq(Count(ns), "1", "1 of 2")
+	w.bag[5513] = 1
+	w:fire("BAG_UPDATE_DELAYED")
+	H.eq(Shown(ns), false, "one of each item: 2, hidden")
+
+	local w2, ns2 = World("WARLOCK", { "Create Soulstone" }, function(p)
+		Few("soulstone", 2)(p)
+		p.missingItem[2] = nil
+	end)
+	ns2.SetMissingItem("soulstone", true)
+	w2.bag[5232] = 1
+	w2:fire("BAG_UPDATE_DELAYED")
+	H.eq(Shown(ns2), true, "1 of 2")
+	w2.buffs["Soulstone Resurrection"] = true
+	ns2.UpdateAlerts()
+	H.eq(Shown(ns2), false, "one stone and the buff on you: 2, hidden")
+end)
+
+-- TICK-0223: the first row at none goes before an earlier row with a few
+-- left (dev-warlock: the Soul Shard row hid a missing Healthstone).
+H.test("few: a row at none goes before an earlier row with a few left", function()
+	local w, ns = World("WARLOCK", { "Create Soulstone", "Summon Voidwalker" }, Few("soulstone", 2))
+	ns.SetMissingItem("soulstone", true)
+	w.bag[5232] = 1
+	w.bag[6265] = 0
+	w:fire("BAG_UPDATE_DELAYED")
+	H.eq(Icon(ns).tex.file, 1000 + 6265, "1 of 2 stones and no shard: the shard's icon")
+	H.eq(Count(ns), "", "no count at none")
+	w.bag[6265] = 1
+	w:fire("BAG_UPDATE_DELAYED")
+	H.eq(Shown(ns), true, "a shard: the stone row next")
+	H.eq(Icon(ns).tex.file, 1000 + 5232, "the stone's icon")
+	H.eq(Count(ns), "1", "with its count")
+	w.bag[5232] = 0
+	w:fire("BAG_UPDATE_DELAYED")
+	H.eq(Icon(ns).tex.file, 1000 + 5232, "both at none: the first in class file order")
+end)
+
+H.test("few: a few left of a row you make shows its icon but never wakes the HUD", function()
+	local w, ns, ids = World("MAGE", { "Conjure Mana Gem" }, Few("manaGem", 3))
+	Idle(w)
+	w.usable[ids["Conjure Mana Gem"]] = true
+	w.bag[5514] = 1
+	H.eq(ns.MissingItemWake(), false, "1 of 3: no wake")
+	H.eq((ns.HUDini:ShouldShow()), false, "idle")
+	ns.UpdateAlerts()
+	H.eq(Shown(ns), true, "the icon shows when the HUD shows")
+	w.bag[5514] = 0
+	H.eq(ns.MissingItemWake(), true, "none: the wake, as before")
+end)

@@ -374,7 +374,23 @@ local ALERTS = {
 	{ key = "dispel",    row = "warnDispel",     text = "setup.class.dispel" },
 	{ key = "purge",     row = "showPurgeable",  text = "setup.class.purge" },
 	{ key = "keepUp",    row = "warnKeepUp",     text = "setup.class.keepUp" },
+	-- The buffs tracked from the start (TICK-0204, TICK-0209): Arcane
+	-- Intellect and the armor for a Mage. They show by the health bar with
+	-- the tracked buff alert, so its row turns the line on.
+	{ key = "trackBuff", row = "warnOwnBuff",    text = "setup.class.trackBuff" },
 }
+
+-- A name that counts for one already named (a group in auraMap, such as a
+-- Mage's three armors) is said once: one on counts for all.
+local function SameGroup(named, name)
+	if not ns.AuraNamesFor then return false end
+	for _, other in ipairs(named) do
+		for _, aura in ipairs(ns.AuraNamesFor(other)) do
+			if aura == name then return true end
+		end
+	end
+	return false
+end
 
 -- The spells a class value names, in a fixed order: a name, a list, a
 -- dispel table by type (sorted by type), or a purge table with .spell.
@@ -407,25 +423,36 @@ end
 -- spell the player does not know yet. A row that is off counts as no alert.
 function ns.SetupAlertLines()
 	local db, lines, unknown, named = DB(), {}, false, false
+	-- The combat buffs the keepUp line covers: a tracked buff of the same
+	-- group (a Warlock's armor is in both lists) is said there, once.
+	local covered
 	for _, alert in ipairs(ALERTS) do
 		local value = db[alert.row] and ns.ClassValue(alert.key)
 		local spells = value and Spells(alert.key, value) or {}
 		local known = {}
 		for _, spell in ipairs(spells) do
 			local name = SpellName(spell)
+			if alert.key == "trackBuff" and covered and SameGroup(covered, name) then
+				name = nil
+			end
 			if name then
 				named = true
 				if ns.KnownSpell(spell) then
-					known[#known + 1] = name
+					if alert.key ~= "trackBuff" or not SameGroup(known, name) then
+						known[#known + 1] = name
+					end
 				else
 					unknown = true
 				end
 			end
 		end
 		if #known > 0 then
-			-- The interrupt line names every known spell; the others the first.
-			local name = alert.key == "interrupt" and table.concat(known, ", ") or known[1]
+			-- The interrupt and tracked buff lines name every known spell; the
+			-- others the first.
+			local all = alert.key == "interrupt" or alert.key == "trackBuff"
+			local name = all and table.concat(known, ", ") or known[1]
 			lines[#lines + 1] = Text(alert.text, name)
+			if alert.key == "keepUp" then covered = known end
 		end
 	end
 	return lines, unknown, named
@@ -463,7 +490,7 @@ local function BellBox(name)
 		label = Text("setup.class.bell", name),
 		checked = function() return ns.GetReadyAlert(name) end,
 		enabled = function() return true end,
-		-- The bell only: the timer bar part stays as it is.
+		-- Glow and sound (D-048, ns.SetReadyAlert): the timer bar stays as it is.
 		click = function() ns.SetReadyAlert(name, not ns.GetReadyAlert(name)) end,
 		rows = { CooldownRow(name) },
 	}
@@ -482,8 +509,9 @@ local function SoundBox()
 			return db.showHealth and (db.warnOwnBuff or db.warnKeepUp) and true or false
 		end,
 		click = function()
-			local choice = ns.GetKeepUpSoundChoice()
-			if choice ~= "off" then
+			-- The choice, not its key: a check puts back its volume too.
+			local choice = ns.GetKeepUpSoundValue()
+			if choice then
 				lastSound = choice
 				ns.SetKeepUpSound("off")
 			else
@@ -1198,8 +1226,8 @@ local function Open(quiet)
 	page = FIRST
 	TakeOwn()
 	-- Step 7's sound box puts back the sound on at open.
-	local sound = ns.GetKeepUpSoundChoice()
-	if sound ~= "off" then lastSound = sound end
+	local sound = ns.GetKeepUpSoundValue()
+	if sound then lastSound = sound end
 	Show()
 end
 

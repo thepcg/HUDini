@@ -518,6 +518,15 @@ H.test("/hud debug ids checks each ID, finds the right one, and saves the result
 	H.ok(H.printed(w, "Diagnostic report saved. Reload or log out to write it to SavedVariables."))
 end)
 
+H.test("/hud debug ids checks a class file's trackBuff names (TICK-0204)", function()
+	local w, ns = EnglishWorld({})
+	ns.ClassProfiles().MAGE.trackBuff = { "Test Tracked Buff" }
+	w:slash("/hud debug ids")
+	RunAll(w)
+	local report = w.env.HUDiniDB.spellIDReport
+	H.ok(Has(report.noID, "MAGE: Test Tracked Buff"), "a trackBuff name with no ID is named")
+end)
+
 H.test("/hud debug ids names a spell no ID has, and runs once at a time", function()
 	local w, ns = EnglishWorld({})
 	ns.SPELL_SCAN = { to = 30000, step = 10000 }

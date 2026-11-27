@@ -313,6 +313,23 @@ function ns.SetColorHex(key, hex)
 	if c then SetColor(key, c.r, c.g, c.b) end
 end
 
+-- A color picked outside the Colors page (a bar's texture button,
+-- TICK-0242): one saved value, so it goes through the page's own setting
+-- (Options.lua RegisterColors). The page then shows it, runs its own
+-- repaint, and its Defaults resets it. Before the page is built, it is
+-- saved as the page's setter saves it.
+function ns.SetBarColorHex(key, hex)
+	local get = Settings and Settings.GetSetting
+	local setting = get and get("HUDini_color_" .. key) -- locale: skip a setting name
+	if setting and setting.SetValue then
+		setting:SetValue(hex)
+	else
+		ns.SetColorHex(key, hex)
+		if key == "timer" and ns.RefreshTimerBars then ns.RefreshTimerBars() end
+	end
+	if ns.RepaintLookButtons then ns.RepaintLookButtons() end
+end
+
 --------------------------------------------------------------------------------
 -- Plain bars
 --------------------------------------------------------------------------------
@@ -323,14 +340,16 @@ local styled = {}   -- every StatusBar we own, so the texture can be swapped
 -- its colour follows the target, see TargetReactionColor. The bar remembers
 -- its key and the colour it shows (shownColor), because a texture swap
 -- resets the colour and ApplyTexture has to put it back.
-local function StyleBar(b, colorKey, reverse)
+-- lookId is the bar id whose look it wears (BarLooks.lua, TICK-0224); flat:
+-- its texture only, never a gradient. The fill direction is set first: a
+-- gradient starts where the fill starts.
+local function StyleBar(b, colorKey, reverse, lookId, flat)
 	b.colorKey = colorKey
-	b.shownColor = Color(colorKey or "hostile")
-	b:SetStatusBarTexture(ns.BarTexturePath())
-	b:SetStatusBarColor(unpack(b.shownColor))
+	if reverse then b:SetReverseFill(true) end
+	ns.LookBar(b, lookId, flat)
+	ns.PaintBar(b, Color(colorKey or "hostile"))
 	b:SetMinMaxValues(0, 1)
 	b:SetValue(0)
-	if reverse then b:SetReverseFill(true) end
 	styled[#styled + 1] = b
 	return b
 end
@@ -342,15 +361,21 @@ ns.StyleBar = StyleBar
 -- The shield and heal parts follow a new texture and the bar's width
 -- (TICK-0120); set below.
 local AnchorPredict, SizePredict
+-- The resource bar's fight fill (TICK-0220): placed over the bar and
+-- given a new texture; set below.
+local PlaceResource, RestyleResource
+-- The resource bar's own lightning strips (TICK-0221) follow a new texture;
+-- set below.
+local DressBarArt
 
 function ns.ApplyTexture()
-	local path = ns.BarTexturePath()
 	for _, b in ipairs(styled) do
-		b:SetStatusBarTexture(path)
 		if b.colorKey and not b.stateShown then b.shownColor = Color(b.colorKey) end
-		if b.shownColor then b:SetStatusBarColor(unpack(b.shownColor)) end
+		if b.shownColor then ns.RepaintBar(b) else ns.PaintTexture(b) end
 	end
 	if AnchorPredict then AnchorPredict() end
+	if RestyleResource then RestyleResource() end
+	if DressBarArt then DressBarArt() end
 end
 
 -- Player bars live in the body so they hide with the icons. Target bars hang
@@ -422,7 +447,7 @@ local function CreateBar(key)
 	local dynamic = (key == "targethealth" or key == "power" or key == "targetpower")
 	-- Mana in forms (TICK-0107) wears the mana color, picker and all.
 	local colorKey = (key == "druidmana") and "mana" or key
-	StyleBar(b, (not dynamic) and colorKey or nil)
+	StyleBar(b, (not dynamic) and colorKey or nil, nil, key)
 
 	b.backdrop = b:CreateTexture(nil, "BACKGROUND")
 	b.backdrop:SetPoint("TOPLEFT", -1, 1)
@@ -434,7 +459,7 @@ local function CreateBar(key)
 		-- draws over it. It carries the backdrop, since the health bar's own
 		-- would cover it. It shows and hides with the health bar.
 		local trail = CreateFrame("StatusBar", "HUDiniBar_trail", parent)
-		StyleBar(trail, "trail")
+		StyleBar(trail, "trail", nil, "health")
 		trail:SetAllPoints(b)
 		b:SetFrameLevel(trail:GetFrameLevel() + 1)
 
@@ -563,14 +588,111 @@ end
 
 ns.GetBar = GetBar
 
--- Tick marks that split the resource bar into one segment per pip.
+-- Tick marks that split the resource bar into one segment per pip. They
+-- sit on a layer above the game's fill of the bar in a fight (TICK-0220).
 local resourceTicks = {}
+local RES_TICK_LEVEL = 8 -- above the bar: over the fight fill's container (+1) and its button
+
+-- Lightning Shield's look (TICK-0221): one lightning strip per charge, in
+-- place of the fill's color. Over a StatusBar's fill, a frame that clips
+-- its children runs from the bar's left end to the right end of the fill
+-- texture, and holds one strip per segment, each stretched to its segment.
+-- The game moves the fill's end with the count, secret or not, so the
+-- strips of the charges you have show and the rest are cut off: Lua never
+-- reads the count. A charge that is off shows the bar's dark backdrop.
+-- The fill itself goes see-through (its texture's alpha, which a new
+-- color leaves alone), so only the strips show.
+local LIGHTNING_ART = "Interface\\AddOns\\" .. ADDON .. "\\Media\\LightningSegment"
+local LIGHTNING_ID = 324 -- the ID Classes\Shaman.lua gives Lightning Shield
+
+-- True for Lightning Shield: the client's own name for its ID, as the
+-- class file's name becomes on any client (Classes.lua). /hud debug ids
+-- checks the ID. The name is kept once it reads plain, so a name made
+-- secret in a fight does not change the look.
+local lightningName
+local function IsLightning(r)
+	local aura = r and r.aura
+	if type(aura) ~= "string" then return false end
+	if not lightningName and C_Spell and C_Spell.GetSpellName then
+		local ok, name = pcall(C_Spell.GetSpellName, LIGHTNING_ID)
+		if ok and not ns.IsSecret(name) and type(name) == "string" then lightningName = name end
+	end
+	return lightningName == aura
+end
+
+-- Put the strips on a fill (DressArt): made on first need, cut at the fill
+-- texture's end, one per segment; none with the look off.
+local function BuildArt(fill, art, on, width, count, tex)
+	if not art.clip then
+		art.clip = CreateFrame("Frame", nil, fill)
+		art.clip:SetClipsChildren(true)
+	end
+	if not (on and tex) then
+		art.clip:Hide()
+		return
+	end
+	art.clip:ClearAllPoints()
+	art.clip:SetPoint("TOPLEFT", fill, "TOPLEFT")
+	art.clip:SetPoint("BOTTOMRIGHT", tex, "BOTTOMRIGHT")
+	for i = 1, count do
+		local strip = art.strips[i]
+		if not strip then
+			strip = art.clip:CreateTexture(nil, "ARTWORK")
+			strip:SetTexture(LIGHTNING_ART)
+			art.strips[i] = strip
+		end
+		strip:ClearAllPoints()
+		strip:SetPoint("TOPLEFT", fill, "TOPLEFT", math.floor(width * (i - 1) / count + 0.5), 0)
+		strip:SetPoint("BOTTOMRIGHT", fill, "BOTTOMLEFT", math.floor(width * i / count + 0.5), 0)
+		strip:Show()
+	end
+	for i = count + 1, #art.strips do
+		art.strips[i]:Hide()
+	end
+	art.clip:Show()
+end
+
+-- Give a fill its look, in fill.art: the strips over it when on, else
+-- none and the fill as before. width is the bar's width; with none known
+-- yet, nothing changes. Done again only when the look, the width, the
+-- pips or the fill texture changed. Every call on the fill is in a pcall:
+-- the game's fill in a fight (TICK-0220) may be closed to addons. On a
+-- refusal that fill keeps its color fill, with no strips, until /reload.
+local function DressArt(fill, on, width, count)
+	if not fill or fill.artRefused then return end
+	local art = fill.art
+	if not on and not art then return end
+	if on and not width then return end
+	local got, tex = pcall(fill.GetStatusBarTexture, fill)
+	if not got then
+		fill.artRefused = true
+		return
+	end
+	if art and art.on == on and art.width == width and art.count == count and art.tex == tex then return end
+	if not art then
+		art = { strips = {} }
+		fill.art = art
+	end
+	if pcall(BuildArt, fill, art, on, width, count, tex) then
+		art.on, art.width, art.count, art.tex = on, width, count, tex
+		if tex then pcall(tex.SetAlpha, tex, on and 0 or 1) end
+	else
+		fill.artRefused = true
+		if art.clip then pcall(art.clip.Hide, art.clip) end
+		if tex then pcall(tex.SetAlpha, tex, 1) end
+	end
+end
 
 local function LayoutResourceTicks(bar, width, height, count)
+	if not bar.tickLayer then
+		bar.tickLayer = CreateFrame("Frame", nil, bar)
+		bar.tickLayer:SetAllPoints(bar)
+	end
+	bar.tickLayer:SetFrameLevel(bar:GetFrameLevel() + RES_TICK_LEVEL)
 	for i = 1, count - 1 do
 		local tick = resourceTicks[i]
 		if not tick then
-			tick = bar:CreateTexture(nil, "OVERLAY")
+			tick = bar.tickLayer:CreateTexture(nil, "OVERLAY")
 			tick:SetColorTexture(0, 0, 0, 0.85)
 			resourceTicks[i] = tick
 		end
@@ -690,7 +812,7 @@ local function CreateCastSet(key, unit, twoTone, reverse)
 	local holder = CreateFrame("Frame", "HUDiniCast_" .. key, parent)
 
 	local base = StyleBar(CreateFrame("StatusBar", nil, holder),
-		twoTone and "shielded" or "playercast", reverse)
+		twoTone and "shielded" or "playercast", reverse, key)
 	base:SetAllPoints(holder)
 
 	local backdrop = holder:CreateTexture(nil, "BACKGROUND")
@@ -707,7 +829,7 @@ local function CreateCastSet(key, unit, twoTone, reverse)
 	}
 
 	if twoTone then
-		set.hot = StyleBar(CreateFrame("StatusBar", nil, holder), "interrupt", reverse)
+		set.hot = StyleBar(CreateFrame("StatusBar", nil, holder), "interrupt", reverse, key)
 		set.hot:SetAllPoints(holder)
 		set.hot:SetFrameLevel(base:GetFrameLevel() + 1)
 	end
@@ -774,8 +896,7 @@ local function EndFlash(set)
 	set.flash = nil
 	local base = set.base
 	base.stateShown = nil
-	base.shownColor = Color(base.colorKey)
-	base:SetStatusBarColor(unpack(base.shownColor))
+	ns.PaintBar(base, Color(base.colorKey))
 	set.holder:SetAlpha(CastAlpha())
 	local p = CastWords(set)
 	if p then p.castWord:SetAlpha(1) end
@@ -899,8 +1020,7 @@ local function StartFlash(set, word)
 	base:SetValue(1)
 	-- stateShown keeps the red through a texture swap (ns.ApplyTexture).
 	base.stateShown = true
-	base.shownColor = FLASH_RED
-	base:SetStatusBarColor(unpack(FLASH_RED))
+	ns.PaintBar(base, FLASH_RED)
 	p.castWord:SetText(word)
 	p.castWord:SetAlpha(1)
 	ShowCastWords(set, "flash")
@@ -1056,19 +1176,28 @@ end
 --------------------------------------------------------------------------------
 -- The class resource bar
 --
--- The class profile names the resource (Classes.lua), one of two kinds:
+-- The class profile names the resource (Classes.lua), one of three kinds:
 --
 --     { aura = "Name", max = 5 }                  stacks of a buff on you
 --     { power = "ComboPoints", onlyWith = "ENERGY" }  a power type; onlyWith
 --                                                  limits it to one form
+--     { { aura = "A", max = 5 }, { aura = "B", max = 3 } }  a list: the
+--                                                  first buff on you
+--     { aura = "A", max = 5, prefer = true }      in a list: wins while it
+--                                                  is yours to get (below)
+--     { aura = "A", max = 4, filter = "HARMFUL" } stacks of a debuff on you
 --
--- A class without one gets no resource bar at all.
+-- A class without one gets no resource bar at all. A buff from the class
+-- file counts only while it is on you or you know its spell (TICK-0199):
+-- a low-level character, or a Mage with no Arcane Blast, gets no empty
+-- bar. A buff you picked on the Your class page always counts: HUDini saw
+-- it stack on you.
 --
--- The first attempt went through 12.1's AuraContainer and SetApplicationBar.
--- That road is closed: the bar you hand to SetApplicationBar must be a
--- descendant of the AuraButton, and an addon frame cannot be reparented into
--- one ("Reparenting disallowed as child object would inherit forbidden
--- aspects").
+-- The first attempt went through 12.1's AuraContainer and SetApplicationBar,
+-- and moved an addon bar into the AuraButton. The game refuses that move
+-- ("Reparenting disallowed as child object would inherit forbidden
+-- aspects"). A bar made as the button's own child works: "The resource bar
+-- in a fight" below takes that road, in a fight only.
 --
 -- SenseiClassResourceBar showed the short way. Just read the aura:
 --
@@ -1080,11 +1209,162 @@ end
 -- into StatusBar:SetValue, which is built to swallow a secret.
 --------------------------------------------------------------------------------
 
+-- The name of the class file's buff picked last while your auras read: a
+-- fight hides them, so the pick then stays as it was (TICK-0199). A name,
+-- not the entry: on another client the class file's value may be a new
+-- table at each ask. Known limit: a shield swapped in a fight shows at the
+-- fight's end.
+local resPick
+
+-- The preferred buffs (prefer = true) seen on you since login, by name.
+local resSeen = {}
+
+-- Talent ranks by name, asked once until your spells or talents change:
+-- a number, or false when this client does not tell.
+local talentRanks = {}
+
+-- True when the slot of this resource buff has a spell ID to match (set
+-- below, with the IDs).
+local IDsKnown
+
+-- True when you know the spell of this name (its ID by name, then
+-- IsPlayerSpell).
+local function KnowsSpell(name)
+	local ok, id = pcall(ns.SpellID, name)
+	if not ok or type(id) ~= "number" then return false end
+	return IsPlayerSpell and IsPlayerSpell(id) and true or false
+end
+
+-- The filter an entry's aura is read with (TICK-0238): "HARMFUL" for a
+-- debuff (Arcane Blast on TBC and Wrath), else "HELPFUL".
+local function ResourceFilter(e)
+	return e.filter == "HARMFUL" and "HARMFUL" or "HELPFUL" -- locale: skip a filter
+end
+
+-- The rank of the talent of this name, or nil when this client does not
+-- tell. Classic's talent API: GetTalentInfo(tab, index) answers the name
+-- first and the rank fifth. A talent with no spell ID by name (Maelstrom
+-- Weapon) is found this way. Another shape of answer (a number first) is
+-- not this API, so no rank.
+-- Talent data not loaded yet (no tab, no talent) is asked again next time;
+-- an answer with talents and none of this name is kept.
+local function TalentRank(name)
+	local kept = talentRanks[name]
+	if kept ~= nil then return kept or nil end
+	local tabs, count, info = _G.GetNumTalentTabs, _G.GetNumTalents, _G.GetTalentInfo
+	if not (tabs and count and info) then return nil end
+	local okTabs, nTabs = pcall(tabs)
+	nTabs = okTabs and Plain(nTabs) or nil
+	if type(nTabs) ~= "number" then return nil end
+	local asked = 0
+	for t = 1, nTabs do
+		local okN, n = pcall(count, t)
+		n = okN and Plain(n) or nil
+		for i = 1, type(n) == "number" and n or 0 do
+			asked = asked + 1
+			local ok, tName, _, _, _, rank = pcall(info, t, i)
+			if ok and type(tName) == "string" and Plain(tName) == name then
+				rank = Plain(rank)
+				talentRanks[name] = type(rank) == "number" and rank or false
+				return talentRanks[name] or nil
+			end
+		end
+	end
+	if asked > 0 then talentRanks[name] = false end
+	return nil
+end
+
+-- True when a preferred entry's buff is yours to get, with it not on you:
+-- you know its spell, or its talent has a rank. With no talent answer: it
+-- was on you since login (a proc buff with no spell ID by name). Never
+-- before its slot has a spell ID: in a fight the slot gives the count, and
+-- with no ID it counts 0 for the whole fight. Maelstrom Weapon has no ID
+-- by name on Forever: its ID comes from a read on you (LearnResourceID),
+-- and until then the earlier pick stays.
+local function Preferred(e)
+	if not IDsKnown(e.aura) then return false end
+	if KnowsSpell(e.aura) then return true end
+	local rank = TalentRank(e.aura)
+	if rank ~= nil then return rank > 0 end
+	return resSeen[e.aura] == true
+end
+
+-- The class file's entry at the last ask out of combat lockdown, false for
+-- none; nil before the first ask. In lockdown the answer stays this one: a
+-- spell learned at a level-up mid fight (SPELLS_CHANGED) would add the
+-- resource row and move the rows, while the secure click buttons stay in
+-- their slots until the fight ends (Clicks.lua). The fight's end asks
+-- again (PLAYER_REGEN_ENABLED -> ns.UpdateBars -> ns.UpdateResource), and
+-- the layout then follows. In lockdown no aura or spell is read at all.
+local resLaid
+
+-- One entry of the class file's resource (a list or a single entry): a
+-- preferred entry on you or yours to get (TICK-0238), else the first buff
+-- on you, read while your auras read; in a fight the last pick; else the
+-- first you know. A power entry always counts. nil: none. The read's
+-- answer is a plain table or nil, never a count, so testing it is safe.
+local function PickEntry(r)
+	local list = (r.aura or r.power) and { r } or r
+	local hidden = ns.AurasHidden and ns.AurasHidden() or false
+	if hidden then
+		for _, e in ipairs(list) do
+			if type(e) == "table" and e.aura ~= nil and e.aura == resPick then return e end
+		end
+	end
+	local function OnYou(e)
+		if hidden or not (C_UnitAuras and C_UnitAuras.GetAuraDataBySpellName) then return false end
+		local ok, data = pcall(C_UnitAuras.GetAuraDataBySpellName, "player", e.aura, ResourceFilter(e))
+		return ok and data ~= nil
+	end
+	-- An Enhancement Shaman in Lightning Shield counts Maelstrom Weapon.
+	for _, e in ipairs(list) do
+		if type(e) == "table" and e.prefer == true and type(e.aura) == "string" then
+			local on = OnYou(e)
+			if on then resSeen[e.aura] = true end
+			if on or Preferred(e) then
+				if not hidden then resPick = e.aura end
+				return e
+			end
+		end
+	end
+	local known
+	for _, e in ipairs(list) do
+		if type(e) == "table" then
+			if e.power then
+				known = known or e
+				if not hidden then break end
+			elseif type(e.aura) == "string" then
+				if OnYou(e) then
+					resPick = e.aura
+					return e
+				end
+				if not known and KnowsSpell(e.aura) then known = e end
+			end
+		end
+	end
+	if not hidden then resPick = known and known.aura end
+	return known
+end
+
+-- PickEntry, held as it was in combat lockdown (resLaid).
+local function ClassEntry(r)
+	if resLaid ~= nil and InCombatLockdown and InCombatLockdown() then
+		return resLaid or nil
+	end
+	local e = PickEntry(r)
+	resLaid = e or false
+	return e
+end
+
 -- The class's resource right now, or nil. A power resource tied to one form
 -- (a druid's combo points, onlyWith = "ENERGY") only counts in that form.
 local function Resource()
 	local r = ns.ClassValue("resource")
 	if type(r) ~= "table" then return nil end
+	if HUDiniDB and ns.ClassDB().resource == nil then
+		r = ClassEntry(r)
+		if not r then return nil end
+	end
 	if r.aura then return r end
 	if r.power and Enum.PowerType and Enum.PowerType[r.power] then
 		if r.onlyWith then
@@ -1096,6 +1376,28 @@ local function Resource()
 	return nil
 end
 
+-- True while your class resource is Lightning Shield: the same answer the
+-- bar's art takes (IsLightning), so the Options tooltip and the bar never
+-- disagree (TICK-0231).
+function ns.ResourceIsLightning()
+	return IsLightning(Resource())
+end
+
+-- The resource the bar shows now: { aura, max } or { power, onlyWith }, or
+-- nil (TICK-0199). For Options and the looks list, which should not read
+-- the class file's list themselves.
+function ns.ClassResource()
+	return Resource()
+end
+
+-- The class file's entry the bar would show with Class default picked:
+-- on you, else known; a power entry always. nil: you know none yet.
+function ns.ClassFileResource()
+	local r = ns.ClassDefault("resource")
+	if type(r) ~= "table" then return nil end
+	return ClassEntry(r)
+end
+
 -- How many pips: the class file's max, else the game's own maximum.
 local function ResourcePips(r)
 	if r.max then return r.max end
@@ -1104,6 +1406,11 @@ local function ResourcePips(r)
 		if most and most > 0 then return most end
 	end
 	return 5
+end
+
+DressBarArt = function()
+	local bar, r = bars.resource, Resource()
+	if bar and r then DressArt(bar, IsLightning(r), bar:GetWidth(), ResourcePips(r)) end
 end
 
 -- The bar shows only when you want it and your class has a resource.
@@ -1175,14 +1482,374 @@ local function UpdateFormMana()
 	Fill(GetBar("druidmana"), UnitPower("player", MANA), UnitPowerMax("player", MANA))
 end
 
+--------------------------------------------------------------------------------
+-- The resource bar in a fight (TICK-0220)
+--
+-- A fight hides your auras: no read finds the buff, so the read in
+-- ns.UpdateResource drew 0 with Lightning Shield on. The game's own aura
+-- container still draws the buff: its slot's button fills a StatusBar from
+-- the buff's stack count (SetApplicationBar), in a fight too. That bar must
+-- be the button's own child, so HUDini makes it in the slot's
+-- initializeFrame, as Auras.lua makes the icon's buff time (TICK-0159).
+-- The dead end above moved an addon bar into the button, which the game
+-- refuses; a bar made there is not moved.
+--
+-- The game shows the button only while the buff is on, so the fill goes
+-- with the buff, and HUDini reads nothing. The container is on only while
+-- your auras are hidden, the bar shows and the body shows; the bar's own
+-- fill stays empty then. Out of that, it is off and the read draws, as
+-- before. The container hangs on the anchor, not in the body (the body
+-- hides in a fight, and the container may be protected), so it follows
+-- the body's alpha and is placed over the bar out of a fight only.
+--------------------------------------------------------------------------------
+
+local resBox      -- nil: not made yet; false: this client cannot; else its parts
+local resIDs = {}  -- spell IDs read from the resource buff: { [name] = { [id] = true } }
+local resIDsVersion = 0 -- one more each time resIDs learns an ID
+local idCache      -- the last ResourceIDs answer, with what it was worked out from
+local RES_TRIES = 5 -- refused calls to the container tried again, out of a fight (Again)
+
+local function Try(f, method, ...)
+	local fn = f and f[method]
+	if type(fn) ~= "function" then return false end
+	return pcall(fn, f, ...)
+end
+
+-- Try, for a call Retarget makes again on later updates when it is
+-- refused: the fill, its max, the slot's IDs. One count for all of them,
+-- RES_TRIES refusals in all, then none until the next fight's start or
+-- restriction change (ns.ResourceEdge). UNIT_POWER_FREQUENT runs Retarget
+-- many times a second; a button that never takes a call is left alone.
+local function Again(s, f, method, ...)
+	if (s.tries or 0) >= RES_TRIES then return false end
+	if Try(f, method, ...) then return true end
+	s.tries = (s.tries or 0) + 1
+	return false
+end
+
+local function Hidden()
+	return ns.AurasHidden and ns.AurasHidden() or false
+end
+
+-- The spell IDs the slot matches, as a set and as a string that changes
+-- with it: the spell's ID by its name, the IDs read from the buff here,
+-- and the ones Auras.lua keeps for that buff name. Worked out again only
+-- when the buff name, the IDs read here or the count Auras.lua keeps
+-- changed, and at the start of each fight (the events below): it runs on
+-- every aura change of yours.
+local function ResourceIDs(r)
+	local cdb = ns.ClassDB and ns.ClassDB()
+	local kept = type(cdb) == "table" and type(cdb.auraSpellIDs) == "table" and cdb.auraSpellIDs[r.aura]
+	if type(kept) ~= "table" then kept = nil end
+	local n = 0
+	for _ in pairs(kept or {}) do n = n + 1 end
+	local tag = r.aura .. "|" .. resIDsVersion .. "|" .. n
+	if idCache and idCache.tag == tag then return idCache.set, idCache.key end
+	local set, list = {}, {}
+	local function Add(id)
+		id = Plain(id)
+		if type(id) == "number" and not set[id] then
+			set[id] = true
+			list[#list + 1] = id
+		end
+	end
+	if C_Spell and type(C_Spell.GetSpellInfo) == "function" then
+		local ok, info = pcall(C_Spell.GetSpellInfo, r.aura)
+		if ok and type(info) == "table" then Add(info.spellID) end
+	end
+	for id in pairs(resIDs[r.aura] or {}) do Add(id) end
+	for id in pairs(kept or {}) do Add(id) end
+	table.sort(list)
+	idCache = { tag = tag, set = set, key = table.concat(list, " ") }
+	return idCache.set, idCache.key
+end
+
+-- Keep the buff's spell ID from a read that worked (it is plain then).
+local function LearnResourceID(r, data)
+	local ok, id = pcall(function() return data.spellId end)
+	id = ok and Plain(id) or nil
+	if type(id) ~= "number" then return end
+	resIDs[r.aura] = resIDs[r.aura] or {}
+	if resIDs[r.aura][id] then return end
+	resIDs[r.aura][id] = true
+	resIDsVersion = resIDsVersion + 1
+end
+
+-- The same IDs ResourceIDs finds: the spell's ID by name, an ID read here,
+-- or one Auras.lua keeps.
+IDsKnown = function(name)
+	if next(resIDs[name] or {}) then return true end
+	local cdb = ns.ClassDB and ns.ClassDB()
+	local kept = type(cdb) == "table" and type(cdb.auraSpellIDs) == "table" and cdb.auraSpellIDs[name]
+	if type(kept) == "table" then
+		for id in pairs(kept) do
+			if type(Plain(id)) == "number" then return true end
+		end
+	end
+	if C_Spell and type(C_Spell.GetSpellInfo) == "function" then
+		local ok, info = pcall(C_Spell.GetSpellInfo, name)
+		if ok and type(info) == "table" and type(Plain(info.spellID)) == "number" then return true end
+	end
+	return false
+end
+
+-- The slot's button, from the game's own code. It sits at the container's
+-- center (the flow layout may size the container; its center stays, as
+-- in Auras.lua), takes no mouse, and gets the fill: the resource color on
+-- the bar texture, filled to the class's pips. Its size comes with the
+-- place (SizeButton). The bar is made here, as the button's own child,
+-- and kept: a refused SetApplicationBar is tried again later (Retarget).
+local function DressResource(s, button, max)
+	s.button = button
+	button:ClearAllPoints()
+	button:SetPoint("CENTER", s.box, "CENTER")
+	Try(button, "SetMouseMotionEnabled", false)
+	Try(button, "SetMouseClickEnabled", false)
+	local fill = CreateFrame("StatusBar", nil, button)
+	fill:SetAllPoints(button)
+	ns.LookBar(fill, "resource")
+	ns.PaintBar(fill, Color("resource"))
+	s.spare = fill
+	if Try(button, "SetApplicationBar", fill, { maxApplications = max }) then
+		s.fill, s.max = fill, max
+	end
+end
+
+-- Make the container once, for an aura resource whose spell ID is known:
+-- out of a fight and while your auras read, as the game's button refuses
+-- HUDini while they are hidden, with no lockdown too (Auras.lua). Nil:
+-- try again later; false: this client has no container.
+local function BuildResource(r)
+	if resBox ~= nil then return resBox end
+	if InCombatLockdown() or Hidden() then return nil end
+	local set, key = ResourceIDs(r)
+	if not next(set) then return nil end
+	resBox = false
+	if C_AddOns and type(C_AddOns.LoadAddOn) == "function" then
+		pcall(C_AddOns.LoadAddOn, "Blizzard_AuraContainer") -- locale: skip an addon name
+	end
+	local ok, box = pcall(CreateFrame, "AuraContainer", nil, HUDini, "CustomAuraContainerTemplate")
+	if not ok or not box or type(box.AddAuraSlot) ~= "function" then
+		if ok and box then
+			Try(box, "SetEnabled", false)
+			box:Hide()
+		end
+		return false
+	end
+	-- Off before the slot goes in: on, it would listen for every unit.
+	Try(box, "SetEnabled", false)
+	Try(box, "SetEditModePreviewEnabled", false)
+	Try(box, "SetUnit", "player")
+	-- The slot's filter is set here once: a resource read with another
+	-- filter later (a list of a buff and a debuff) keeps its last count in a
+	-- fight (SyncResource).
+	local filter = ResourceFilter(r)
+	local s = { box = box, key = key, aura = r.aura, filter = filter, on = false, placed = false }
+	local max = ResourcePips(r)
+	local okSlot = Try(box, "AddAuraSlot", "resource", filter, { -- locale: skip a slot key
+		candidateFilters = { includeSpellIDs = set },
+		initializeFrame = function(button) pcall(DressResource, s, button, max) end,
+	})
+	-- No slot or no button: this client cannot. A refused fill only waits.
+	if not okSlot or not (s.button and s.spare) then
+		Try(box, "SetEnabled", false)
+		box:Hide()
+		return false
+	end
+	Try(box, "SetAlpha", HUDini.body:GetAlpha())
+	resBox = s
+	PlaceResource()
+	return s
+end
+
+-- The button at the bar's size. Out of a fight and while your auras read
+-- only (the button refuses then). True when it has that size.
+local function SizeButton(s)
+	local at = s.at
+	if not (at and s.button) then return false end
+	local size = at[3] .. "x" .. at[4]
+	if s.size == size then return true end
+	if InCombatLockdown() or Hidden() then return false end
+	if not pcall(function()
+		s.button:ClearAllPoints()
+		s.button:SetPoint("CENTER", s.box, "CENTER")
+		s.button:SetSize(at[3], at[4])
+	end) then
+		return false
+	end
+	s.size = size
+	return true
+end
+
+-- Put the container over the bar, at its center and size, and the button
+-- at its size, out of a fight only. In a fight a bar that moved leaves it
+-- unplaced (off) until the next place out of a fight.
+function PlaceResource()
+	local s, bar = resBox, bars.resource
+	if not (s and bar) then return end
+	local point, rel, relPoint, x, y = bar:GetPoint(1)
+	local w, h = bar:GetWidth(), bar:GetHeight()
+	local at = s.at
+	if InCombatLockdown() then
+		if not (at and point == "BOTTOMLEFT" and rel == HUDini and relPoint == "TOPLEFT"
+			and x == at[1] and y == at[2] and w == at[3] and h == at[4]) then
+			s.placed = false
+		end
+		return
+	end
+	s.placed, s.at = false, nil
+	if point ~= "BOTTOMLEFT" or rel ~= HUDini or relPoint ~= "TOPLEFT" then return end
+	if not pcall(function()
+		s.box:ClearAllPoints()
+		s.box:SetPoint("CENTER", HUDini, "TOPLEFT", x + w / 2, y + h / 2)
+		s.box:SetSize(w, h)
+		s.box:SetFrameLevel(bar:GetFrameLevel() + 1)
+	end) then
+		return
+	end
+	s.at = { x, y, w, h }
+	s.placed = SizeButton(s)
+end
+
+-- A new texture or resource color: the fill follows, out of a fight and
+-- while your auras read (the game may close the fill to addons while they
+-- are hidden). Else it waits for the next Retarget.
+function RestyleResource()
+	local s = resBox
+	if not (s and s.spare) then return end
+	if InCombatLockdown() or Hidden() then
+		s.restyle = true
+		return
+	end
+	s.restyle = nil
+	s.spare.lookAsked = nil
+	pcall(ns.PaintBar, s.spare, Color("resource"))
+end
+
+-- Out of a fight and while your auras read, the container follows the
+-- resource picked now (the Your class page: another buff, other stacks):
+-- the fill again when it was refused, its max, the slot's IDs, the place.
+local function Retarget(s, r)
+	if InCombatLockdown() or Hidden() then return end
+	if s.restyle then RestyleResource() end
+	local max = ResourcePips(r)
+	if not s.fill then
+		if Again(s, s.button, "SetApplicationBar", s.spare, { maxApplications = max }) then
+			s.fill, s.max = s.spare, max
+		else
+			return
+		end
+	end
+	if s.max ~= max then
+		if Again(s, s.button, "SetApplicationBar", s.fill, { maxApplications = max }) then
+			s.max = max
+		else
+			s.max = nil
+		end
+	end
+	local set, key = ResourceIDs(r)
+	if key == "" then
+		-- No spell ID known for this buff yet: an empty list may match any
+		-- buff. Off (want) until one is read.
+		s.aura = nil
+	elseif s.aura ~= r.aura or s.key ~= key then
+		if Again(s, s.box, "SetAuraSlotCandidateFilters", "resource", { includeSpellIDs = set }) then -- locale: skip a slot key
+			s.aura, s.key = r.aura, key
+		else
+			s.aura = nil
+		end
+	end
+	if not s.placed then PlaceResource() end
+	DressArt(s.spare, IsLightning(r), s.at and s.at[3], s.max or max)
+end
+
+-- Switch the container on while it should draw the bar (above): your
+-- auras hidden, a fill set up for this resource and its pips, placed, the
+-- bar and the body shown. True when it is on: the bar's own fill then
+-- stays empty.
+local function SyncResource(r)
+	local s = resBox
+	local aura = r and r.aura and HUDiniDB.showResource
+	if s == nil and aura and bars.resource then s = BuildResource(r) end
+	if not s then return false end
+	if aura then Retarget(s, r) end
+	local want = (aura and Hidden() and s.fill and s.placed and s.aura == r.aura
+		and s.filter == ResourceFilter(r)
+		and s.max == ResourcePips(r) and bars.resource:IsShown() and HUDini.body:IsShown())
+		and true or false
+	if want then
+		-- An ID read since the slot was made (the game takes it in a fight).
+		local set, key = ResourceIDs(r)
+		if key == "" then
+			want = false
+		elseif key ~= s.key then
+			if Try(s.box, "SetAuraSlotCandidateFilters", "resource", { includeSpellIDs = set }) then -- locale: skip a slot key
+				s.key = key
+			else
+				want = false
+			end
+		end
+	end
+	if want ~= s.on and Try(s.box, "SetEnabled", want) then s.on = want end
+	return s.on
+end
+
+hooksecurefunc(HUDini.body, "SetAlpha", function(_, alpha) -- locale: skip a method name
+	if resBox then Try(resBox.box, "SetAlpha", alpha) end
+end)
+
+-- The body (and the bar in it) shows or hides, in a fight too: the
+-- container follows.
+local function FollowBody()
+	if HUDiniDB and resBox then ns.UpdateResource() end
+end
+HUDini.body:HookScript("OnShow", FollowBody)
+HUDini.body:HookScript("OnHide", FollowBody)
+
+-- The count last drawn from a read and its buff, kept while your auras
+-- are hidden and no container draws the bar: better a count from before
+-- than 0. In a box, as the count may be secret: it is never compared, not
+-- even with nil. Known limit: a charge used up in the fight is not seen
+-- then; the bar keeps the count from before until the fight ends.
+local lastCount
+
+-- A fight starts or a restriction changes: the slot's IDs are worked out
+-- again once (ResourceIDs), and a refused fill gets its few tries again.
+function ns.ResourceEdge()
+	idCache = nil
+	if resBox then resBox.tries = 0 end
+end
+
+-- What the bar showed at the last update, as a string ("" for none): a
+-- buff on you or a spell learned can change the resource (TICK-0199), and
+-- the bar's row, pips and art then need the layout again. nil: no update yet.
+local resShown
+
+local function ResourceKey(r)
+	if not r then return "" end
+	return tostring(r.aura or r.power) .. "|" .. tostring(r.max) .. "|" .. tostring(r.onlyWith)
+end
+
 function ns.UpdateResource()
 	local resource = Resource()
-	if not (HUDiniDB.showResource and resource) then return end
+	local key = ResourceKey(resource)
+	if resShown ~= key then
+		local first = resShown == nil
+		resShown = key
+		if not first then HUDini:Layout() end
+	end
+	if not (HUDiniDB.showResource and resource) then
+		SyncResource(nil)
+		return
+	end
 
 	local bar = GetBar("resource")
+	DressBarArt()
 
 	if resource.power then
-		-- A power type is a plain passthrough, like health.
+		-- A power type is a plain passthrough, like health. A buff picked
+		-- before may have left the container on: off.
+		SyncResource(nil)
 		local ptype = Enum.PowerType[resource.power]
 		Fill(bar, UnitPower("player", ptype), UnitPowerMax("player", ptype))
 		return
@@ -1190,22 +1857,44 @@ function ns.UpdateResource()
 
 	bar:SetMinMaxValues(0, ResourcePips(resource))
 
+	-- In a fight the game's fill draws the stacks (TICK-0220).
+	if SyncResource(resource) then
+		bar:SetValue(0)
+		return
+	end
+
 	if not (C_UnitAuras and C_UnitAuras.GetAuraDataBySpellName) then
 		bar:SetValue(0)
 		return
 	end
 
-	local ok, data = pcall(C_UnitAuras.GetAuraDataBySpellName, "player", resource.aura, "HELPFUL")
+	local ok, data = pcall(C_UnitAuras.GetAuraDataBySpellName, "player", resource.aura, ResourceFilter(resource))
+	local hidden = Hidden()
 
-	-- No aura, or the call refused. Either way, empty.
+	-- No aura, or the call refused. Either way, empty; but while your auras
+	-- are hidden no read finds the buff, so the last count of this buff stays.
 	if not ok or not data then
+		if hidden and lastCount and lastCount[2] == resource.aura
+			and pcall(bar.SetValue, bar, lastCount[1]) then
+			return
+		end
+		lastCount = nil
 		bar:SetValue(0)
 		return
 	end
 
+	if not hidden then
+		LearnResourceID(resource, data)
+		-- The first ID known: the container can be made now.
+		if resBox == nil then SyncResource(resource) end
+	end
+
 	-- applications can be secret. Hand it over without looking at it, and fall
 	-- back to empty only if the widget refuses it.
-	if not pcall(bar.SetValue, bar, data.applications) then
+	if pcall(bar.SetValue, bar, data.applications) then
+		lastCount = { data.applications, resource.aura }
+	else
+		lastCount = nil
 		bar:SetValue(0)
 	end
 end
@@ -1254,6 +1943,7 @@ function ns.LayoutBars(topOffset, width, left)
 
 			if row.key == "resource" then
 				LayoutResourceTicks(frame, width, row.height, ResourcePips(Resource()))
+				DressArt(frame, IsLightning(Resource()), width, ResourcePips(Resource()))
 			end
 
 			top = y + row.height
@@ -1261,6 +1951,7 @@ function ns.LayoutBars(topOffset, width, left)
 		end
 	end
 
+	if PlaceResource then PlaceResource() end
 	ns.UpdateBarVisibility()
 
 	-- Your own cast bar rides on top of the power bar, see-through. With the
@@ -1414,8 +2105,9 @@ local function SetModes(calc)
 end
 
 -- A part: a StatusBar the health bar's width. texture: the game's own fill
--- texture, tinted; nil: the HUD's bar texture in that color.
-local function Part(holder, texture, color)
+-- texture, tinted; nil: the texture of lookId's look (its health bar's) in
+-- that color.
+local function Part(holder, texture, color, lookId)
 	local part = CreateFrame("StatusBar", nil, holder)
 	if texture then
 		part:SetStatusBarTexture(texture)
@@ -1423,10 +2115,10 @@ local function Part(holder, texture, color)
 		part:SetMinMaxValues(0, 1)
 		part:SetValue(0)
 	else
-		-- A texture swap puts this color back (ApplyTexture).
-		StyleBar(part, nil)
-		part.shownColor = color
-		part:SetStatusBarColor(unpack(color))
+		-- A texture swap puts this color back (ApplyTexture). Its health
+		-- bar's texture, never its gradient (design: the parts).
+		StyleBar(part, nil, nil, lookId or "health", true)
+		ns.PaintBar(part, color)
 	end
 	return part
 end
@@ -1498,8 +2190,8 @@ local function BuildPredict(bar)
 	p.clip:SetFrameLevel(level + 1)
 	p.clip:SetClipsChildren(true)
 
-	p.myHeal = Part(p.clip, nil, GameColor("HEALTHBAR_MY_HEAL_PREDICTION_COLOR", 0, 0.827, 0.765))
-	p.otherHeal = Part(p.clip, nil, GameColor("HEALTHBAR_OTHER_HEAL_PREDICTION_COLOR", 0, 0.631, 0.557))
+	p.myHeal = Part(p.clip, nil, GameColor("HEALTHBAR_MY_HEAL_PREDICTION_COLOR", 0, 0.827, 0.765), bar.lookId)
+	p.otherHeal = Part(p.clip, nil, GameColor("HEALTHBAR_OTHER_HEAL_PREDICTION_COLOR", 0, 0.631, 0.557), bar.lookId)
 	p.shield = Part(p.clip, "Interface\\RaidFrame\\Shield-Fill", GameColor("HEALTHBAR_TOTAL_ABSORB_COLOR", 1, 1, 1))
 	p.healAbsorb = Part(p.clip, "Interface\\RaidFrame\\Absorb-Fill", GameColor("HEALTHBAR_HEAL_ABSORB_COLOR", 1, 1, 1))
 	p.healAbsorb:SetReverseFill(true)
@@ -1708,10 +2400,7 @@ local function FillUnit(bar, unit, color)
 	SetNumbers(bar.numbers, unit, nil, state == nil)
 	local was = bar.stateShown
 	bar.stateShown = state ~= nil
-	if bar.shownColor ~= color then
-		bar.shownColor = color
-		bar:SetStatusBarColor(unpack(color))
-	end
+	if bar.shownColor ~= color then ns.PaintBar(bar, color) end
 	if bar.level and was ~= bar.stateShown then PlaceTargetText(bar) end
 	-- Shields and incoming heals follow the fill (TICK-0120).
 	Predict(bar, unit)
@@ -1739,10 +2428,7 @@ function ns.UpdateBars()
 
 		-- The power's own colour, unless an alert tints it (a curse, Alerts.lua).
 		local color = ns.powerTint or ns.PowerColor()
-		if bar.shownColor ~= color then
-			bar.shownColor = color
-			bar:SetStatusBarColor(unpack(color))
-		end
+		if bar.shownColor ~= color then ns.PaintBar(bar, color) end
 
 		UpdateFormMana()
 	end
@@ -1809,10 +2495,7 @@ function ns.UpdateTargetPower()
 	UpdateTargetPowerNumbers()
 
 	local color = PowerColorFor(token)
-	if bar.shownColor ~= color then
-		bar.shownColor = color
-		bar:SetStatusBarColor(unpack(color))
-	end
+	if bar.shownColor ~= color then ns.PaintBar(bar, color) end
 	bar:Show()
 end
 
@@ -2093,6 +2776,16 @@ end
 function ns.ProbeAura(out)
 	local resource = Resource()
 	if not resource then
+		local own = ns.ClassValue("resource")
+		if type(own) == "table" and ns.ClassDB().resource == nil then
+			local names = {}
+			for _, e in ipairs((own.aura or own.power) and { own } or own) do
+				if type(e) == "table" and e.aura then names[#names + 1] = tostring(e.aura) end
+			end
+			out("  Your class's resource buffs: " .. table.concat(names, ", ") .. ".")
+			out("  None is on you and you know none of their spells yet, so there is no bar.")
+			return
+		end
 		out("  HUDini knows no resource buff for your class (" .. tostring(ns.ClassToken()) .. ").")
 		out("  Pick one on the Your class page of the options.")
 		return
@@ -2101,14 +2794,15 @@ function ns.ProbeAura(out)
 		out("  Resource: " .. resource.power .. ". It comes from your power, so there is no buff to check.")
 		return
 	end
-	out("  Resource buff: " .. resource.aura .. ", " .. (resource.max or 5) .. " pips")
+	out("  Resource buff: " .. resource.aura .. ", " .. (resource.max or 5) .. " pips, read as "
+		.. ResourceFilter(resource) .. (resource.prefer and ", preferred" or ""))
 
 	if not (C_UnitAuras and C_UnitAuras.GetAuraDataBySpellName) then
 		out("  C_UnitAuras.GetAuraDataBySpellName is missing on this client")
 		return
 	end
 
-	local ok, data = pcall(C_UnitAuras.GetAuraDataBySpellName, "player", resource.aura, "HELPFUL")
+	local ok, data = pcall(C_UnitAuras.GetAuraDataBySpellName, "player", resource.aura, ResourceFilter(resource))
 	if not ok then
 		out("  The check failed, so the buff is secret right now.")
 		return
@@ -2215,10 +2909,19 @@ events:SetScript("OnEvent", function(self, event, unit, ...)
 		for _, e in ipairs(CAST_EVENTS) do Listen(e, "player", "target") end
 		Listen("PLAYER_TARGET_CHANGED")
 		Listen("PLAYER_REGEN_ENABLED")
+		-- Your auras hide or read again (TICK-0220): the resource bar's
+		-- container switches. A restriction that starts is enforced only
+		-- after its event, so once more a frame later.
+		Listen("PLAYER_REGEN_DISABLED")
+		Listen("ADDON_RESTRICTION_STATE_CHANGED")
 		Listen("UNIT_NAME_UPDATE", "target")
 		-- Your level too: it changes the target level's color (TICK-0101).
 		Listen("UNIT_LEVEL", "player", "target")
 		Listen("UNIT_CLASSIFICATION_CHANGED", "target")
+		-- A spell learned can bring the class resource bar in (TICK-0199).
+		Listen("SPELLS_CHANGED")
+		-- A talent point spent or taken back (TICK-0238).
+		Listen("CHARACTER_POINTS_CHANGED")
 		-- A PvP flag going on or off (TICK-0097).
 		Listen("UNIT_FACTION", "player", "target")
 		Listen("PLAYER_FLAGS_CHANGED", "player", "target")
@@ -2236,6 +2939,21 @@ events:SetScript("OnEvent", function(self, event, unit, ...)
 
 	if (event == "UNIT_HEALTH" or event == "UNIT_MAXHEALTH") and unit == "player" then
 		ns.OnPlayerHealth()
+	end
+
+	if event == "SPELLS_CHANGED" or event == "CHARACTER_POINTS_CHANGED" then
+		talentRanks = {}
+		-- A respec: a buff seen before may no longer be yours to get.
+		if event == "CHARACTER_POINTS_CHANGED" then resSeen = {} end
+		ns.UpdateResource()
+		return
+	end
+
+	if event == "PLAYER_REGEN_DISABLED" or event == "ADDON_RESTRICTION_STATE_CHANGED" then
+		ns.ResourceEdge()
+		ns.UpdateResource()
+		C_Timer.After(0, function() if HUDiniDB then ns.UpdateResource() end end)
+		return
 	end
 
 	-- A form change swaps the power, and can bring the resource bar in or out.
